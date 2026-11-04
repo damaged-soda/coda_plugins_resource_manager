@@ -269,7 +269,7 @@ test('上限：20,000 条仍按日期；20,001 条回 sortFallback 按名称；�
   const fallback = await listDirectory(root, '', null, { listing, sort: sorted('size', true) });
   assert.equal(fallback.sortFallback, true);
   assert.equal(fallback.entries[0].name, 'f00000');
-  assert.ok(spy.counts.lstat - lstatBefore === fallback.entries.length || spy.counts.lstat - lstatBefore <= fallback.entries.length + 60);
+  assert.equal(spy.counts.lstat - lstatBefore, fallback.entries.length, '退回名称后只读这一页的元数据');
   assert.ok(fallback.nextCursor && !(await listDirectory(root, '', fallback.nextCursor, { listing })).sortFallback, '只有第一页带 sortFallback');
   assert.equal(listing.snapshots.size, 0);
   for (const key of ['name', 'kind']) {
