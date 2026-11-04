@@ -32,6 +32,7 @@ const tree = mountTree($('tree'), model, {
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
   actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
+  back: isIOS ? null : () => model.select(null),
 });
 
 // ---- 在独立视图里打开：iPhone 点文件，Mac 预览头部的「窗口」 ----
@@ -92,6 +93,7 @@ function paintNotice() {
 
 function render() {
   const current = mode();
+  const focusInPreview = $('preview').contains(document.activeElement);
   for (const [id, name] of [['tree', 'tree'], ['preview', 'preview'], ['notice', 'notice']]) {
     $(id).classList.toggle('off', current !== name);
     $(id).inert = current !== name;
@@ -102,22 +104,26 @@ function render() {
     preview.open(model.selected, pending.preview);
     pending.preview = null;
   } else if (current !== 'preview' && preview.path !== null) preview.close();
-  syncToolbar(current);
+  // 预览被 inert 时焦点会掉到页面外（头部的返回刚被按过）：交给目录树。
+  if (focusInPreview && current === 'tree') { $('tree').tabIndex = -1; $('tree').focus(); }
+  syncToolbar();
 }
 
-// ---- 工具栏：Mac 用 coda.toolbar，没有的（iOS）退成页内一条 ----
-const toolbarItems = current => [
-  ...(current === 'preview' ? [{ id: 'back', label: '返回', icon: 'chevron.left', kind: 'button' }] : []),
-  { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
-  { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
-];
+// ---- 工具栏：Mac 用 coda.toolbar，没有的（iOS、harness）退成页内一条 ----
+// Mac 只有一个原生菜单 ⋯：不写 icon，标题就是 ⋯；on 要随状态重新声明才会更新。返回键在预览头部，不在这里。
+const toolbarItems = () => hasToolbar
+  ? [{ id: 'more', label: '⋯', kind: 'menu', options: [{ id: 'refresh', label: '刷新', on: false }, { id: 'hidden', label: '显示隐藏文件', on: model.showHidden }] }]
+  : [
+    { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
+    { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
+  ];
 // iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新和显示隐藏文件在 ⋯ 的菜单里。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
 const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
-function syncToolbar(current) {
-  const items = isIOS ? phoneItems() : toolbarItems(current), key = JSON.stringify(items);
+function syncToolbar() {
+  const items = isIOS ? phoneItems() : toolbarItems(), key = JSON.stringify(items);
   if (key === lastItems) return;
   lastItems = key;
   if (hasToolbar) return quiet(() => coda.toolbar(items));
@@ -135,7 +141,6 @@ function act(id, button) {
       { label: '显示隐藏文件', checked: model.showHidden, run: () => act('hidden') },
     ] });
   }
-  else if (id === 'back') model.select(null);
   else if (id === 'hidden') { model.setShowHidden(!model.showHidden); persisted.hidden = model.showHidden; }
   else if (id === 'refresh') {
     conn.refresh();
@@ -143,7 +148,9 @@ function act(id, button) {
     preview.refresh();
   }
 }
-quiet(() => coda.on('toolbar', ({ id }) => act(id)));
+// 原生菜单的事件是 { id: 'more', option }：按 option 分发，缺失或不认识的什么都不做。
+const MENU_OPTIONS = new Set(['refresh', 'hidden']);
+quiet(() => coda.on('toolbar', ({ id, option }) => { if (id === 'more' && MENU_OPTIONS.has(option)) act(option); }));
 
 // ---- 状态保留 ----
 let saveTimer = null;

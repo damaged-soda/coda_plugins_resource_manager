@@ -149,7 +149,7 @@ test('setState 抛错：界面不受影响，下一次保存照常进行', async
   assert.equal(fail, 0);
   assert.equal(text(page), 'aaaaa');
   assert.equal(saved.length, 0);
-  button(page.bar, '返回').dispatch('click'); // 再有一次变化，保存重试
+  button(page.preview, '返回').dispatch('click'); // 再有一次变化，保存重试
   await flush();
   tick(300);
   assert.equal(saved.at(-1).sessions.s1.selected, null);
@@ -290,4 +290,37 @@ test('说明区重画后焦点不丢到页面外：重试按钮聚焦时点它�
   tick(30_000);
   await flush();
   assert.equal(document.activeElement, button(page.notice, '重试'), '再次失败，焦点落在新的重试按钮上');
+});
+
+test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录树：滚动位置在，选中清掉，焦点落在目录树', async t => {
+  const { page } = await previewing(t);
+  const head = page.preview.find(node => node.classList.contains('phead'))[0];
+  const back = button(page.preview, '返回');
+  assert.equal(head.children[0], back, '在最左边');
+  assert.equal(back.title, '返回');
+  assert.ok(back.classList.contains('icon'), '和头部其他图标按钮一样');
+  assert.equal(back.textContent, '');
+  page.tree.scrollTop = 321;
+  back.focus();
+  back.dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true);
+  assert.equal(page.preview.inert, true);
+  assert.equal(page.tree.scrollTop, 321);
+  assert.equal(page.tree.inert, false);
+  assert.equal(globalThis.document.activeElement, page.tree, '焦点不丢到页面外');
+});
+
+test('Mac 的返回不动没有焦点在预览里的情况：焦点不被抢走', async t => {
+  const { page } = await previewing(t);
+  globalThis.document.activeElement = null;
+  button(page.preview, '返回').dispatch('click');
+  await flush();
+  assert.notEqual(globalThis.document.activeElement, page.tree);
+});
+
+test('iPhone 点文件不进预览，预览头部没有「返回」', async t => {
+  const { page } = await open(t, { roots: { '/A': tree('aaaaa') }, coda: { platform: 'ios' } });
+  await Promise.resolve();
+  assert.equal(button(page.preview, '返回'), undefined);
 });

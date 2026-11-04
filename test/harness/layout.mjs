@@ -227,11 +227,19 @@ try {
   await open('mac', 'mac', 'light');
   await evaluate(`[...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('notes.txt')).click()`);
   await until(`document.querySelector('.text')`, 'Mac 预览出现');
-  const mac = await evaluate(`(() => { const buttons = [...document.querySelectorAll('.phead button.icon')];
+  const mac = await evaluate(`(() => { const buttons = [...document.querySelectorAll('.phead button.icon:not([aria-label="返回"])')];
     return { labels: buttons.map(x => x.getAttribute('aria-label') + '/' + x.title), sizes: buttons.map(x => x.getBoundingClientRect().width), meta: document.querySelector('.pmeta').textContent,
       headIcon: document.querySelector('.pico svg') !== null, inside: buttons.every(x => x.getBoundingClientRect().right <= innerWidth) }; })()`);
   check('Mac：预览头部有文件图标、复制路径和窗口两个图标按钮（28 点，有 aria-label 和 title）', JSON.stringify(mac.labels) === JSON.stringify(['复制路径/复制路径', '窗口/窗口']) && mac.sizes.every(x => x === 28) && mac.headIcon && mac.inside, JSON.stringify(mac));
   check('Mac：元信息是 行数 · 大小', /^300 行 · \d/.test(mac.meta), mac.meta);
+
+  // 预览头部最左边的返回：和其他图标按钮同样 28 点，点了回到目录树，滚动位置和展开状态不变。
+  const back = await evaluate(`(() => { const head = document.querySelector('.phead'), b = head.firstElementChild, r = b.getBoundingClientRect(), o = head.querySelector('button.icon:not([aria-label="返回"])').getBoundingClientRect();
+    return { label: b.getAttribute('aria-label') + '/' + b.title, icon: b.classList.contains('icon') && b.querySelector('svg') !== null, w: r.width, h: r.height, ow: o.width, oh: o.height, leftmost: r.left < head.querySelector('.pico').getBoundingClientRect().left && r.left >= 0 }; })()`);
+  check('Mac：预览头部最左边是「返回」图标按钮，尺寸和其他图标按钮一致', back.label === '返回/返回' && back.icon && back.leftmost && back.w === back.ow && back.h === back.oh && back.w === 28, JSON.stringify(back));
+  await evaluate(`(() => { const b = document.querySelector('.phead').firstElementChild; b.focus(); b.click(); })()`); // 键盘激活时焦点在按钮上
+  await until(`!document.getElementById('preview').matches(':not(.off)') && !document.getElementById('tree').classList.contains('off')`, '回到目录树');
+  check('Mac：点返回回到目录树，展开状态在，焦点在目录树', await evaluate(`document.querySelectorAll('.row.entry').length > 0 && document.activeElement === document.getElementById('tree')`));
 
   // ---- 截图 ----
   const picked = { v: 1, seq: 1, hidden: false, sessions: { A: { at: 1, expanded: [], selected: 'notes.txt', scroll: { tree: 0, top: 0, left: 0 } } } }; // iPhone 上刚打开过 notes.txt，回到树页时它是选中行

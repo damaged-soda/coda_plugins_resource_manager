@@ -172,12 +172,61 @@ test('Mac 没有 coda.toolbar 时（harness）退成页内一条文字按钮，�
   assert.equal(page.bar.find(node => node.classList.contains('bar-title')).length, 0);
 });
 
-test('Mac 有 coda.toolbar 时：项交给原生工具栏，不带页面自己的字段；页内没有工具条', async t => {
+const more = on => ({ id: 'more', label: '⋯', kind: 'menu', options: [{ id: 'refresh', label: '刷新', on: false }, { id: 'hidden', label: '显示隐藏文件', on }] });
+
+test('Mac 有 coda.toolbar 时：只声明一个 ⋯ 菜单，没有 icon，没有返回；页内没有工具条', async t => {
   const given = [];
   const { page } = await start(t, { platform: 'mac', coda: { toolbar: items => given.push(items) } });
   assert.equal(visible(page.bar), false);
-  assert.deepEqual(given.at(-1).map(item => Object.keys(item).sort().join()), ['icon,id,kind,label', 'icon,id,kind,label,on']);
-  assert.deepEqual(given.at(-1).map(item => item.icon), ['arrow.clockwise', 'eye']);
+  assert.deepEqual(given.at(-1), [more(false)]);
+  assert.equal('icon' in given.at(-1)[0], false);
+  tapRow(page);
+  await flush();
+  assert.deepEqual(given.at(-1), [more(false)], '预览里工具栏不变，也没有返回');
+});
+
+// 假的客户端：记下 coda.on('toolbar') 的回调，按 { id, option } 触发。
+async function startMac(t) {
+  const given = [], events = {};
+  const ctx = await start(t, { platform: 'mac', coda: { toolbar: items => given.push(items), on: (name, fn) => { events[name] = fn; } } });
+  return { ...ctx, given, press: event => events.toolbar(event) };
+}
+const tapRow = page => rowNamed(page, 'a.txt').dispatch('click');
+
+test('Mac 的 ⋯ 菜单：option 为 refresh 刷新，为 hidden 切换显示隐藏文件并重新声明 on', async t => {
+  const { page, host, given, press } = await startMac(t);
+  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+  const before = host.lists().length;
+  press({ id: 'more', option: 'refresh' });
+  await flush();
+  assert.ok(host.lists().length > before, '刷新重新列了目录');
+  const declared = given.length;
+  press({ id: 'more', option: 'hidden' });
+  await flush();
+  assert.deepEqual(names(page), ['a.txt', '.git', 'b.txt']);
+  assert.equal(given.length, declared + 1);
+  assert.deepEqual(given.at(-1), [more(true)], 'on 跟着状态变');
+  press({ id: 'more', option: 'hidden' });
+  await flush();
+  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+  assert.deepEqual(given.at(-1), [more(false)]);
+});
+
+test('Mac 的 ⋯ 菜单：option 缺失或不认识什么都不做', async t => {
+  const { page, host, given, press } = await startMac(t);
+  const [lists, declared] = [host.lists().length, given.length];
+  for (const event of [{ id: 'more' }, { id: 'more', option: 'nope' }, { id: 'more', option: 'more' }, { id: 'refresh' }, { id: 'hidden' }, { id: 'back' }, { id: 'other', option: 'refresh' }]) press(event);
+  await flush();
+  assert.equal(host.lists().length, lists);
+  assert.equal(given.length, declared);
+  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+});
+
+test('iPhone 不声明 coda.toolbar，用页内工具条', async t => {
+  let declared = 0;
+  const { page } = await start(t, { platform: 'ios', coda: { toolbar: () => { declared++; } } });
+  assert.equal(declared, 0);
+  assert.ok(visible(page.bar));
 });
 
 test('菜单开着时工具条重画（根目录从不可用变成 ready）：菜单关闭，新的 ⋯ 再激活是打开', async t => {

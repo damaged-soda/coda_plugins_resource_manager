@@ -158,3 +158,11 @@ test('说明区加了图标：没有会话和连不上都有，文字照旧', as
   assert.equal(page.notice.find(node => node.classList.contains('notice-icon')).length, 1);
   assert.equal(page.notice.textContent, '正在读取…');
 });
+
+test('文件页（独立窗口和 iPhone）头部没有「返回」按钮', async t => {
+  const files = { 'f.txt': { text: 'x' } };
+  const mac = await start(t, { path: 'f.txt', platform: 'mac', files, coda: { toolbar: () => {} } });
+  assert.equal(named(head(mac.page), '返回'), undefined);
+  const ios = await start(t, { path: 'f.txt', platform: 'ios', files });
+  assert.equal(named(head(ios.page), '返回'), undefined);
+});
