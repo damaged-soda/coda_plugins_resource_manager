@@ -240,6 +240,20 @@ test('context 事件换文件：滚动位置重置，读新路径', async t => {
   assert.equal(host.sent.filter(m => m.type === 'read').at(-1).path, 'g.txt');
 });
 
+test('context 事件在内容到达前换文件：待恢复的位置不用于新文件', async t => {
+  const roots = { '/A': { ...tree('aaaaa'), ...tree('gggg', 100, 'g.txt') } };
+  const { page, host } = await open(t, { roots, state: { v: 1, top: 90, left: 0 } });
+  host.hold = true;
+  host.session('s1');
+  await flush();
+  host.events.context({ args: { session: 's1', path: 'g.txt' } });
+  host.hold = false;
+  host.held.splice(0);
+  await flush();
+  assert.equal(text(page), 'gggg');
+  assert.equal(body(page).scrollTop, 0);
+});
+
 test('换会话：context 和 session 两条消息谁先到都一样，对上之前不读', async t => {
   for (const contextFirst of [true, false]) {
     const roots = { '/A': tree('aaaaa'), '/B': tree('bbbbb') };
