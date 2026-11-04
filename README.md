@@ -58,7 +58,7 @@ npx --yes github:coda-console/coda-plugins#<提交> . --manifest
 
 工作流用 npm 可信发布，不需要令牌。只有手动运行才会发布，合并到 `main` 不会自动发布。
 
-首次发布要先有包，可信发布才能配置：在本机 `npm login` 后手动运行 `npm publish --access public`，再到 npm 上 `@coda-console/resource-manager` 的设置里配置可信发布，仓库填 `sealiu1997/coda_plugins_resource_manager`，流程文件填 `publish.yml`。之后就按上面的步骤走。
+首次发布要先有包，可信发布才能配置：在本机 `npm login` 后手动运行 `npm publish --access public`，再到 npm 上 `@coda-console/resource-manager` 的设置里配置可信发布，仓库填 `sealiu1997/coda_plugins_resource_manager`，流程文件填 `publish.yml`，并勾选允许 `npm publish`（Allow npm publish）。新配置默认只允许 `npm stage publish`，不勾选的话工作流的发布步骤会被拒绝。之后就按上面的步骤走。
 
 ## 许可
 
