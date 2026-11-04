@@ -17,6 +17,7 @@ async function start(t, options) {
 }
 const down = (page, name, extra) => rowNamed(page, name).dispatch('pointerdown', touch(extra));
 const click = (page, name) => rowNamed(page, name).dispatch('click');
+const escape = () => globalThis.document.emit({ type: 'keydown', key: 'Escape' });
 
 test('长按：按住 500 毫秒打开菜单，写完整相对路径，复制按钮可用；没到时间不开', async t => {
   const { page, host, tick } = await start(t);
@@ -86,6 +87,7 @@ test('触发后紧接着的点击不打开文件，下一次独立点击正常�
   click(page, 'a.txt');
   await flush();
   assert.equal(host.calls.open.length, 0, '被吞掉');
+  escape(); // 菜单开着时点别处只会关菜单，先关掉
 
   down(page, 'a.txt'); // 下一次独立点击
   rowNamed(page, 'a.txt').dispatch('pointerup', touch());
@@ -97,6 +99,7 @@ test('触发后紧接着的点击不打开文件，下一次独立点击正常�
   down(page, 'b.txt'); // 触发了，但系统没有送来点击
   tick(500);
   rowNamed(page, 'b.txt').dispatch('pointerup', touch());
+  escape();
   down(page, 'b.txt'); // 之后的新一次点击不受影响
   rowNamed(page, 'b.txt').dispatch('pointerup', touch());
   click(page, 'b.txt');

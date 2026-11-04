@@ -76,7 +76,11 @@ export class Element extends Emitter {
   }
   getBoundingClientRect() { return { height: 24, width: 100 }; }
   dispatch(type, init = {}) {
-    const event = { type, target: this, preventDefault() {}, ...init };
+    let stopped = false;
+    const event = { type, target: this, preventDefault() {}, stopPropagation() { stopped = true; }, ...init };
+    // document 上的监听先于元素（页面里都是捕获阶段）；stopPropagation 后元素收不到。
+    globalThis.document?.emit?.(event);
+    if (stopped) return event;
     for (let at = this; at instanceof Element; at = at.parent) at.emit(event);
     return event;
   }

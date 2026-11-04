@@ -142,5 +142,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     remeasure() { measure(); this.render(); },
     scroll: () => el.scrollTop,
     scrollTo(top) { el.scrollTop = top; },
+    // 切会话时调用：长按的等待和吞点击的标记都属于上一个会话。
+    reset() { cancelHold(); swallow = false; },
   };
 }

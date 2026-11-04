@@ -43,15 +43,19 @@ function showHint(text) {
   hintTimer = setTimeout(() => { $('hint').hidden = true; }, 5000);
 }
 // iPhone 防连点：open 进行中、成功后推入动画的这一小段都忽略重复点击；失败立刻放开。
-let opening = false;
+// epoch 每换一次会话加一：旧会话的 open 结果回来时已经作废，不碰新会话的提示和防连点。
+let opening = false, unlockTimer = null, epoch = 0;
 const REOPEN_MS = 1000;
 function openInView(path) {
   if (isIOS) opening = true;
+  const mine = epoch;
   return Promise.resolve().then(() => coda.open({ view: 'file', args: { session: model.session, path } }))
     .then(() => {
+      if (mine !== epoch) return;
       $('hint').hidden = true;
-      if (isIOS) setTimeout(() => { opening = false; }, REOPEN_MS);
+      if (isIOS) { clearTimeout(unlockTimer); unlockTimer = setTimeout(() => { opening = false; }, REOPEN_MS); }
     }, error => {
+      if (mine !== epoch) return;
       opening = false;
       showHint(`打不开文件：${error?.message ?? '未知原因'}`);
     });
@@ -170,7 +174,15 @@ function showMenu(event, path) {
   menu.style.top = `max(var(--safe-top), min(${event.clientY}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
 }
 const hideMenu = () => { menu.hidden = true; };
-document.addEventListener('pointerdown', event => { if (!menu.contains(event.target)) hideMenu(); }, true);
+// 菜单开着时点菜单外：只关菜单，紧接着的那次点击不交给树。
+let menuDismissed = false;
+document.addEventListener('pointerdown', event => {
+  menuDismissed = !menu.hidden && !menu.contains(event.target);
+  if (!menu.contains(event.target)) hideMenu();
+}, true);
+document.addEventListener('click', event => {
+  if (menuDismissed) { menuDismissed = false; event.stopPropagation(); }
+}, true);
 document.addEventListener('keydown', event => { if (event.key === 'Escape') hideMenu(); });
 window.addEventListener('blur', hideMenu);
 $('tree').addEventListener('scroll', hideMenu, { passive: true });
@@ -180,6 +192,12 @@ function onSession(data) {
   saveNow(); // 先存旧会话
   preview.close();
   hideMenu();
+  tree.reset();
+  epoch++;
+  opening = false;
+  clearTimeout(unlockTimer);
+  clearTimeout(hintTimer);
+  $('hint').hidden = true;
   const saved = persisted.sessions[data.session] ?? null;
   pending = saved ? { tree: saved.scroll.tree, preview: { top: saved.scroll.top, left: saved.scroll.left } } : { tree: null, preview: null };
   model.receive(data, saved);
