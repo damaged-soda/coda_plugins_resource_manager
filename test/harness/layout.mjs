@@ -223,8 +223,25 @@ try {
       const item = [...document.querySelectorAll('#menu button')].find(x => x.textContent === '显示隐藏文件'); return closed && item.getAttribute('aria-checked') === 'true' && item.querySelector('svg') !== null; })()`));
   }
 
+  // Mac 的「更多」：控制页只把项目的 id 发回，这里照它的方式往页面发 { harness: 'toolbar', id }。菜单完整在页面内，贴右上角，再按一次关闭。
+  for (const theme of ['light', 'dark']) {
+    await open('mac', 'mac', theme);
+    await evaluate(`postMessage({ harness: 'toolbar', id: 'more' }, '*')`);
+    const mac = await evaluate(`(() => { const m = document.getElementById('menu'), r = m.getBoundingClientRect(), items = [...m.querySelectorAll('button')];
+      return { shown: !m.hidden, names: items.map(x => x.textContent), left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: innerWidth, h: innerHeight }; })()`);
+    check(`Mac ${theme}：「更多」菜单两项，完整在页面内，贴右上角`, mac.shown && JSON.stringify(mac.names) === JSON.stringify(['刷新', '显示隐藏文件'])
+      && mac.left >= 0 && mac.right <= mac.w && mac.top >= 0 && mac.bottom <= mac.h && mac.w - mac.right <= 8 && mac.top <= 8, JSON.stringify(mac));
+    if (theme === 'dark') await shoot('mac-sidebar-dark-menu'); else await shoot('mac-sidebar-light-menu');
+    await evaluate(`postMessage({ harness: 'toolbar', id: 'more' }, '*')`);
+    check(`Mac ${theme}：再按一次「更多」只关闭`, await evaluate(`document.getElementById('menu').hidden`));
+  }
+
   // Mac 预览头部：图标按钮 28 点，有 aria-label 和 title，元信息是 行数 · 大小。
   await open('mac', 'mac', 'light');
+  // 先展开 src、把目录树滚到非零位置：返回之后这两样都要在。
+  await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('src')).click()`);
+  await until(`[...document.querySelectorAll('.row')].some(r => r.textContent.includes('app.js'))`, 'src 展开');
+  const kept = await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = 40; p.dispatchEvent(new Event('scroll')); return p.scrollTop; })()`);
   await evaluate(`[...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('notes.txt')).click()`);
   await until(`document.querySelector('.text')`, 'Mac 预览出现');
   const mac = await evaluate(`(() => { const buttons = [...document.querySelectorAll('.phead button.icon:not([aria-label="返回"])')];
@@ -237,9 +254,12 @@ try {
   const back = await evaluate(`(() => { const head = document.querySelector('.phead'), b = head.firstElementChild, r = b.getBoundingClientRect(), o = head.querySelector('button.icon:not([aria-label="返回"])').getBoundingClientRect();
     return { label: b.getAttribute('aria-label') + '/' + b.title, icon: b.classList.contains('icon') && b.querySelector('svg') !== null, w: r.width, h: r.height, ow: o.width, oh: o.height, leftmost: r.left < head.querySelector('.pico').getBoundingClientRect().left && r.left >= 0 }; })()`);
   check('Mac：预览头部最左边是「返回」图标按钮，尺寸和其他图标按钮一致', back.label === '返回/返回' && back.icon && back.leftmost && back.w === back.ow && back.h === back.oh && back.w === 28, JSON.stringify(back));
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true }); // 无头 Chrome 的页面默认没有焦点，document.hasFocus() 为假
   await evaluate(`(() => { const b = document.querySelector('.phead').firstElementChild; b.focus(); b.click(); })()`); // 键盘激活时焦点在按钮上
   await until(`!document.getElementById('preview').matches(':not(.off)') && !document.getElementById('tree').classList.contains('off')`, '回到目录树');
-  check('Mac：点返回回到目录树，展开状态在，焦点在目录树', await evaluate(`document.querySelectorAll('.row.entry').length > 0 && document.activeElement === document.getElementById('tree')`));
+  check('Mac：点返回回到目录树，焦点在目录树', await evaluate(`document.querySelectorAll('.row.entry').length > 0 && document.activeElement === document.getElementById('tree')`));
+  const after = await evaluate(`({ src: document.querySelector('.row.dir[aria-expanded="true"]')?.textContent, child: [...document.querySelectorAll('.row')].some(r => r.textContent.includes('app.js')), top: document.getElementById('tree').scrollTop })`);
+  check('Mac：返回后展开的目录、它的子项和滚动位置都在', kept > 0 && after.src?.includes('src') && after.child && after.top === kept, `${JSON.stringify(after)}，滚动值 ${kept}`);
 
   // ---- 截图 ----
   const picked = { v: 1, seq: 1, hidden: false, sessions: { A: { at: 1, expanded: [], selected: 'notes.txt', scroll: { tree: 0, top: 0, left: 0 } } } }; // iPhone 上刚打开过 notes.txt，回到树页时它是选中行

@@ -32,7 +32,10 @@ async function open(t, { roots = {}, coda = {}, timers = true } = {}) {
     const files = host.roots[host.root?.path] ?? {};
     const base = { generation: request.generation, requestId: request.requestId };
     if (request.type === 'list') {
-      const entries = Object.keys(files).map(name => ({ name, kind: 'file' }));
+      // 文件名里带 / 的在子目录里：列出 request.path 这一层的文件和目录。
+      const dir = request.path ? `${request.path}/` : '', kinds = new Map();
+      for (const name of Object.keys(files)) if (name.startsWith(dir)) { const [head, rest] = name.slice(dir.length).split('/'); kinds.set(head, rest === undefined ? 'file' : 'dir'); }
+      const entries = [...kinds].map(([name, kind]) => ({ name, kind }));
       return page.post({ type: 'listed', ...base, entries, nextCursor: null });
     }
     if (host.hold) return held.push(request);
@@ -311,12 +314,65 @@ test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录�
   assert.equal(globalThis.document.activeElement, page.tree, '焦点不丢到页面外');
 });
 
-test('Mac 的返回不动没有焦点在预览里的情况：焦点不被抢走', async t => {
+test('Mac 点返回时按钮没拿到焦点（Safari 点按钮不聚焦）：页面持有焦点，照样交给目录树', async t => {
   const { page } = await previewing(t);
   globalThis.document.activeElement = null;
   button(page.preview, '返回').dispatch('click');
   await flush();
-  assert.notEqual(globalThis.document.activeElement, page.tree);
+  assert.equal(globalThis.document.activeElement, page.tree);
+});
+
+test('Mac 点返回但页面没有焦点（document.hasFocus() 为假）：不动目录树的焦点', async t => {
+  const { page } = await previewing(t);
+  const back = button(page.preview, '返回');
+  back.focus();
+  globalThis.document.windowBlurred = true;
+  let focused = 0;
+  page.tree.focus = () => { focused++; };
+  back.dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true, '照样回到目录树');
+  assert.equal(focused, 0);
+});
+
+for (const blurred of [true, false]) test(`不是点返回造成的切回目录树（切会话、root 变化、后台刷新）：不动焦点（页面失焦：${blurred}）`, async t => {
+  {
+    const { page, host } = await previewing(t);
+    globalThis.document.windowBlurred = blurred;
+    let focused = 0;
+    page.tree.focus = () => { focused++; };
+    globalThis.document.activeElement = button(page.preview, '返回'); // 焦点仍在预览里
+    host.session('s2', { state: 'ready', path: '/B' });
+    await flush();
+    assert.equal(visible(page.preview), false, '切会话后预览已关');
+    assert.equal(focused, 0, `切会话 blurred=${blurred}`);
+    await openFile(page);
+    globalThis.document.activeElement = button(page.preview, '返回');
+    host.setRoot('gone');
+    await flush();
+    host.setRoot('ready');
+    host.changed();
+    await flush();
+    assert.equal(focused, 0, `root 变化 blurred=${blurred}`);
+  }
+});
+
+test('Mac 返回后展开的目录、它的子项和滚动位置都在：先展开、滚动、打开文件、再返回', async t => {
+  const { page, host } = await open(t, { roots: { '/A': { 'dir/inner.txt': { text: 'i' }, [FILE]: { text: 'aaaaa' } } } });
+  host.session('s1');
+  await flush();
+  row(page, 'dir').dispatch('click');
+  await flush();
+  assert.ok(row(page, 'inner.txt'), '展开后子项出现');
+  page.tree.scrollTop = 10; // 假 DOM 不量高：滚得太远目录行会掉出窗口，取不到一行高的非零值
+  await openFile(page);
+  assert.equal(visible(page.preview), true);
+  button(page.preview, '返回').dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true);
+  assert.equal(row(page, 'dir').getAttribute('aria-expanded'), 'true', '目录仍是展开的');
+  assert.ok(row(page, 'inner.txt'), '子项还在');
+  assert.equal(page.tree.scrollTop, 10, '滚动位置保留');
 });
 
 test('iPhone 点文件不进预览，预览头部没有「返回」', async t => {

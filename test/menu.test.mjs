@@ -172,54 +172,95 @@ test('Mac 没有 coda.toolbar 时（harness）退成页内一条文字按钮，�
   assert.equal(page.bar.find(node => node.classList.contains('bar-title')).length, 0);
 });
 
-const more = on => ({ id: 'more', label: '⋯', kind: 'menu', options: [{ id: 'refresh', label: '刷新', on: false }, { id: 'hidden', label: '显示隐藏文件', on }] });
+const MAC_MORE = { id: 'more', label: '更多', icon: 'ellipsis', kind: 'button' };
 
-test('Mac 有 coda.toolbar 时：只声明一个 ⋯ 菜单，没有 icon，没有返回；页内没有工具条', async t => {
+test('Mac 有 coda.toolbar 时：只声明一个「更多」按钮，图标是 ellipsis，不是菜单，没有返回；页内没有工具条', async t => {
   const given = [];
   const { page } = await start(t, { platform: 'mac', coda: { toolbar: items => given.push(items) } });
   assert.equal(visible(page.bar), false);
-  assert.deepEqual(given.at(-1), [more(false)]);
-  assert.equal('icon' in given.at(-1)[0], false);
+  assert.deepEqual(given.at(-1), [MAC_MORE]);
   tapRow(page);
   await flush();
-  assert.deepEqual(given.at(-1), [more(false)], '预览里工具栏不变，也没有返回');
+  assert.deepEqual(given.at(-1), [MAC_MORE], '预览里工具栏不变，也没有返回');
 });
 
-// 假的客户端：记下 coda.on('toolbar') 的回调，按 { id, option } 触发。
+// 假的客户端：记下 coda.on('toolbar') 的回调，按 { id } 触发。
 async function startMac(t) {
   const given = [], events = {};
   const ctx = await start(t, { platform: 'mac', coda: { toolbar: items => given.push(items), on: (name, fn) => { events[name] = fn; } } });
   return { ...ctx, given, press: event => events.toolbar(event) };
 }
 const tapRow = page => rowNamed(page, 'a.txt').dispatch('click');
+const openMore = async (ctx, event = { id: 'more' }) => { ctx.press(event); await flush(); };
 
-test('Mac 的 ⋯ 菜单：option 为 refresh 刷新，为 hidden 切换显示隐藏文件并重新声明 on', async t => {
-  const { page, host, given, press } = await startMac(t);
-  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
-  const before = host.lists().length;
-  press({ id: 'more', option: 'refresh' });
-  await flush();
-  assert.ok(host.lists().length > before, '刷新重新列了目录');
-  const declared = given.length;
-  press({ id: 'more', option: 'hidden' });
-  await flush();
-  assert.deepEqual(names(page), ['a.txt', '.git', 'b.txt']);
-  assert.equal(given.length, declared + 1);
-  assert.deepEqual(given.at(-1), [more(true)], 'on 跟着状态变');
-  press({ id: 'more', option: 'hidden' });
-  await flush();
-  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
-  assert.deepEqual(given.at(-1), [more(false)]);
+test('Mac 按下「更多」：页面弹出菜单，两项，对勾不在，贴页面右上角', async t => {
+  const ctx = await startMac(t);
+  await openMore(ctx);
+  const { page } = ctx;
+  assert.ok(visible(page.menu));
+  assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件']);
+  assert.equal(item(page, '显示隐藏文件').getAttribute('role'), 'menuitemcheckbox');
+  assert.equal(item(page, '显示隐藏文件').getAttribute('aria-checked'), 'false');
+  assert.match(page.menu.style.left, /^max\(var\(--safe-left\), min\(220px,/, '右边缘 320 减去菜单宽 100');
+  assert.match(page.menu.style.top, /min\(4px,/, '贴着顶边，只留 4 点');
 });
 
-test('Mac 的 ⋯ 菜单：option 缺失或不认识什么都不做', async t => {
+test('Mac 的「更多」菜单：刷新重新列目录并关菜单；显示隐藏文件切换、关菜单，再打开对勾在；工具栏不重新声明', async t => {
+  const ctx = await startMac(t);
+  const { page, host, given } = ctx;
+  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+  const [lists, declared] = [host.lists().length, given.length];
+  await openMore(ctx);
+  item(page, '刷新').dispatch('click');
+  await flush();
+  assert.ok(host.lists().length > lists, '刷新重新列了目录');
+  assert.equal(visible(page.menu), false);
+  await openMore(ctx);
+  item(page, '显示隐藏文件').dispatch('click');
+  await flush();
+  assert.deepEqual(names(page), ['a.txt', '.git', 'b.txt']);
+  assert.equal(visible(page.menu), false);
+  await openMore(ctx);
+  assert.equal(item(page, '显示隐藏文件').getAttribute('aria-checked'), 'true');
+  assert.ok(item(page, '显示隐藏文件').find(node => node.tagName === 'SVG').length > 0, '对勾图标在');
+  item(page, '显示隐藏文件').dispatch('click');
+  await flush();
+  assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+  assert.equal(given.length, declared, '状态都在菜单里，工具栏不用再声明');
+});
+
+test('Mac 菜单开着时再按「更多」是关闭，再按一次又打开；点菜单外只关菜单', async t => {
+  const ctx = await startMac(t);
+  const { page } = ctx;
+  await openMore(ctx);
+  assert.ok(visible(page.menu));
+  await openMore(ctx);
+  assert.equal(visible(page.menu), false);
+  await openMore(ctx);
+  assert.ok(visible(page.menu));
+  page.tree.dispatch('pointerdown', { pointerId: 1, isPrimary: true });
+  assert.equal(visible(page.menu), false);
+});
+
+test('Mac 的工具栏事件：只认 id 为 more，别的什么都不做', async t => {
   const { page, host, given, press } = await startMac(t);
   const [lists, declared] = [host.lists().length, given.length];
-  for (const event of [{ id: 'more' }, { id: 'more', option: 'nope' }, { id: 'more', option: 'more' }, { id: 'refresh' }, { id: 'hidden' }, { id: 'back' }, { id: 'other', option: 'refresh' }]) press(event);
+  for (const event of [{ id: 'refresh' }, { id: 'hidden' }, { id: 'back' }, { id: 'other' }, { id: 'more2' }, {}, undefined]) press(event);
   await flush();
+  assert.equal(visible(page.menu), false);
   assert.equal(host.lists().length, lists);
   assert.equal(given.length, declared);
   assert.deepEqual(names(page), ['a.txt', 'b.txt']);
+});
+
+test('Mac 的「更多」菜单开着时切会话：菜单关闭，再按是打开', async t => {
+  const ctx = await startMac(t);
+  await openMore(ctx);
+  ctx.host.session('s2', '/other');
+  await flush();
+  assert.equal(visible(ctx.page.menu), false);
+  await openMore(ctx);
+  assert.ok(visible(ctx.page.menu));
 });
 
 test('iPhone 不声明 coda.toolbar，用页内工具条', async t => {
