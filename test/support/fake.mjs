@@ -62,13 +62,14 @@ export function fakeCoda(threads = {}) {
 }
 
 function openView(fake, session) {
-  const handlers = {}, posted = [], dropped = [];
+  const handlers = {}, posted = [], dropped = [], listeners = [];
   const view = {
     id: 'instance', view: 'files', context: { session, args: null },
     postMessage(message) {
       // 同宿主：序列化后超过 128 KiB 的被丢弃。
       if (messageSize(message) > MESSAGE_LIMIT) return dropped.push(message);
       posted.push(JSON.parse(JSON.stringify(message)));
+      for (const fn of listeners) fn(posted.at(-1));
     },
     onMessage: fn => { handlers.message = fn; },
     onContext: fn => { handlers.context = fn; },
@@ -77,7 +78,7 @@ function openView(fake, session) {
   fake.views.get('files').open(view);
   const of = type => posted.filter(message => message.type === type);
   return {
-    posted, dropped, of,
+    posted, dropped, of, listen: fn => listeners.push(fn),
     send: message => handlers.message(message),
     switchTo: next => handlers.context({ session: next, args: null }),
     close: () => handlers.close(),

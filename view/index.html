@@ -2,10 +2,18 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>资源管理器</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <p>资源管理器</p>
+  <div id="bar" class="bar" hidden></div>
+  <main id="stage">
+    <div id="tree" class="pane tree" role="tree"></div>
+    <div id="preview" class="pane preview"></div>
+    <div id="notice" class="pane empty secondary"></div>
+  </main>
+  <div id="menu" class="menu" role="menu" hidden></div>
+  <script type="module" src="app.mjs"></script>
 </body>
 </html>
