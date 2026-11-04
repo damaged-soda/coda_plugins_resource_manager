@@ -104,3 +104,15 @@ test('读的途中根目录换了（同一会话从 A 换到 B）：名称排序
   assert.equal(again.error, undefined);
   assert.equal(again.entries.length, 3, 'B 照常读');
 });
+
+test('并发：8 个视图请求同时列 8 个大目录，经 activate 接线后文件系统并发峰值不超过 8（日期和名称）', async t => {
+  const root = await tempDir(t);
+  for (let d = 0; d < 8; d++) await dirWith(root, `d${d}`, 60);
+  for (const sort of [BY_DATE, undefined]) {
+    const spy = countingFs();
+    const view = await started(fakeCoda({ A: checkoutOf(root) }), 'A', spy);
+    const ids = Array.from({ length: 8 }, (_, d) => list(view, { path: `d${d}`, sort }));
+    for (const id of ids) assert.equal((await view.answer(id)).error, undefined);
+    assert.ok(spy.peak > 1 && spy.peak <= 8, `${sort ? '日期' : '名称'}：峰值 ${spy.peak}`);
+  }
+});

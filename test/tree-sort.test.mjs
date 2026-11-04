@@ -395,8 +395,8 @@ test('越界：不跟随链接。指向外面的链接不带元数据；link: tr
     assert.deepEqual(byName.dangling, { name: 'dangling', kind: 'link' }, key);
     assert.equal(byName['to-in'].size, 5, key);
     assert.ok(Number.isInteger(byName['to-dir'].mtimeMs) && byName['to-dir'].size === undefined, key);
-    assert.deepEqual([spy.counts.realpath, spy.counts.stat], [4, 2], `${key}：4 个链接各解析一次，只有目标在里面的 stat`);
-    assert.equal(spy.counts.lstat, 2, `${key}：只给 dir 和 in.txt 两个普通条目读 lstat，链接复用校验时的 stat`);
+    assert.deepEqual([spy.counts.realpath, spy.counts.stat], [4, 0], `${key}：4 个链接各解析一次，不跟随链接的 stat`);
+    assert.equal(spy.counts.lstat, 4, `${key}：目标在里面的两个链接校验时 lstat 一次，dir 和 in.txt 两个普通条目各一次；链接复用校验时的结果`);
   }
 });
 
@@ -417,5 +417,27 @@ test('越界：readdir 之后条目被换成指向外面的链接，读元数据
     const swapped = entries.find(entry => entry.name === 'swap.txt');
     assert.deepEqual(swapped, { name: 'swap.txt', kind: 'file' }, key);
     assert.ok(!JSON.stringify(entries).includes('99999'), key);
+  }
+});
+
+test('越界：realpath 校验之后目标被换成指向外面的链接，回答里没有外面文件的元数据，条目是 link', async t => {
+  const base = await tempDir(t), root = join(base, 'repo');
+  await mkdir(root);
+  await file(base, 'outside.txt', 99_999, 77);
+  for (const key of ['date', 'name']) {
+    await rm(join(root, 'inside.txt'), { force: true }); await file(root, 'inside.txt', 5);
+    await rm(join(root, 'alias'), { force: true }); await symlink('inside.txt', join(root, 'alias'));
+    const swap = async (...args) => {
+      const original = args.pop(), result = await original(...args);
+      if (String(args[0]).endsWith('alias')) {
+        await rm(join(root, 'inside.txt'));
+        await symlink(join(base, 'outside.txt'), join(root, 'inside.txt'));
+      }
+      return result;
+    };
+    const spy = countingFs({ hooks: { realpath: swap } });
+    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted(key, false) });
+    assert.deepEqual(entries.find(entry => entry.name === 'alias'), { name: 'alias', kind: 'link' }, key);
+    assert.ok(!JSON.stringify(entries).includes('99999') && !JSON.stringify(entries).includes(String(1_700_000_077)), key);
   }
 });

@@ -8,7 +8,7 @@ export const PAGE_BYTES = 96 * 1024;
 export const ENVELOPE_BYTES = 4096;
 export const TEXT_LIMIT = 1024 * 1024;
 export const IMAGE_LIMIT = 8 * 1024 * 1024;
-// 前这么多字节里有 NUL 就当二进制（同 Coda 的 worktree-changes）。
+// 前这么多字节里有 NUL 就当二进制（照 Coda 判断二进制的惯例）。
 export const SNIFF_BYTES = 8000;
 export const REQUEST_ID_MAX = 64;
 

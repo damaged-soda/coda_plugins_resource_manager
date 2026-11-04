@@ -1,4 +1,4 @@
-/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（docs/plugins.md「视图」）。 */
+/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（插件视图的主题变量）。 */
 :root {
   --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
   --line: var(--coda-separator, rgba(0,0,0,.1));

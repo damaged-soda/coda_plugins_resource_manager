@@ -1,4 +1,4 @@
-// 测试用的假 coda 和假 view：形状照 docs/plugins.md「插件宿主」，api、watch 可控。
+// 测试用的假 coda 和假 view：形状照插件宿主给的 coda 对象，api、watch 可控。
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
