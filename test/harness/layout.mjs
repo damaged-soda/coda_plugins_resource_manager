@@ -8,49 +8,84 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const chromePath = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const base = await mkdtemp(join(tmpdir(), 'rm-ui-'));
-const fixture = join(base, 'demo-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
+const DEBUG_PORT = 9334, STARTUP_MS = 60000;
 const FILLER = 120; // 根目录里排在最后的一批文件，撑出第二页以后的内容
 const LONG_LINES = 300; // notes.txt 的行数：文件页要滚得动，才能看最后一行是否被底部工具条挡住
-
-// ---- 假工作目录 ----
-await mkdir(shots, { recursive: true });
-for (const dir of ['src', 'docs', 'assets', 'locked']) await mkdir(join(fixture, dir), { recursive: true });
-const touch = (path, text = 'x\n') => writeFile(join(fixture, path), text);
-await Promise.all([
-  touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'),
-  touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
-  ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
-]);
-await symlink('notes.txt', join(fixture, 'latest-notes'));
-await symlink('/nonexistent-target', join(fixture, 'dangling'));
-await chmod(join(fixture, 'locked'), 0);
 const ROOT_ROWS = 4 + 3 + 2 + FILLER; // 四个目录、三个文件、两个链接、填充
+const wait = ms => new Promise(r => setTimeout(r, ms));
 
+// 先建临时目录，之后所有资源都在 try/finally 里创建，失败时一并清理。
+const base = await mkdtemp(join(tmpdir(), 'rm-ui-'));
+const fixture = join(base, 'demo-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
 const children = [];
+let serverUrl, ws, keepShots = false;
+
+// 起子进程：启动失败（路径不存在等）和提前退出都变成 early 的拒绝，等待启动的地方用 race 接住。
+function launch(name, command, args, options) {
+  const child = spawn(command, args, options);
+  children.push(child);
+  child.early = new Promise((_, reject) => {
+    child.once('error', e => reject(new Error(`${name} 启动失败：${e.message}`)));
+    child.once('exit', (code, signal) => reject(new Error(`${name} 提前退出（${signal ?? code}）`)));
+  });
+  child.early.catch(() => {}); // 正常收尾时的退出不算未处理的拒绝
+  return child;
+}
+const within = (promise, ms, what) => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what}超时（${ms / 1000} 秒）`)), ms); })]).finally(() => clearTimeout(timer)); };
+// 结束子进程并等它退出；礼貌地结束等不到就强杀。
+async function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  child.kill();
+  if (await Promise.race([exited.then(() => true), wait(3000).then(() => false)])) return;
+  child.kill('SIGKILL');
+  await exited;
+}
 const cleanup = async () => {
-  for (const child of children) child.kill();
+  ws?.close();
+  await Promise.all(children.map(stop));
   await chmod(join(fixture, 'locked'), 0o755).catch(() => {});
-  await rm(fixture, { recursive: true, force: true });
-  await rm(profile, { recursive: true, force: true });
+  // 跑完了截图才留下，中途失败时整个临时目录都删掉。
+  for (const dir of keepShots ? [fixture, profile] : [base]) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 };
 
-const server = spawn(process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, fixture, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
-children.push(server);
-const serverUrl = await new Promise(resolve => server.stdout.on('data', data => { const m = /http:\/\/\S+/.exec(String(data)); if (m) resolve(m[0]); }));
-
-const chrome = spawn(chromePath, ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${profile}`, '--no-first-run', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
-children.push(chrome);
-const wait = ms => new Promise(r => setTimeout(r, ms));
-let list;
-for (let i = 0; i < 50 && !list; i++) { try { list = await (await fetch('http://127.0.0.1:9334/json')).json(); } catch { await wait(200); } }
-const ws = new WebSocket(list.find(x => x.type === 'page').webSocketDebuggerUrl);
-await new Promise(r => ws.addEventListener('open', r));
 let id = 0; const waiting = new Map();
-ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m); waiting.delete(m.id); } });
-const send = (method, params = {}) => new Promise(r => { waiting.set(++id, r); ws.send(JSON.stringify({ id, method, params })); });
+const send = (method, params = {}) => new Promise((resolve, reject) => { waiting.set(++id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
 const evaluate = async expr => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
 const until = async (expr, what) => { for (let i = 0; i < 50; i++) { if (await evaluate(expr)) return; await wait(100); } throw new Error(`等不到：${what}`); };
+
+async function start() {
+  // ---- 假工作目录 ----
+  await mkdir(shots, { recursive: true });
+  for (const dir of ['src', 'docs', 'assets', 'locked']) await mkdir(join(fixture, dir), { recursive: true });
+  const touch = (path, text = 'x\n') => writeFile(join(fixture, path), text);
+  await Promise.all([
+    touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'),
+    touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
+    ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
+  ]);
+  await symlink('notes.txt', join(fixture, 'latest-notes'));
+  await symlink('/nonexistent-target', join(fixture, 'dangling'));
+  await chmod(join(fixture, 'locked'), 0);
+
+  const server = launch('harness 服务', process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, fixture, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  serverUrl = await within(Promise.race([server.early, new Promise(resolve => server.stdout.on('data', data => { const m = /http:\/\/\S+/.exec(String(data)); if (m) resolve(m[0]); }))]), STARTUP_MS, 'harness 服务启动');
+
+  // 端口上已经有调试服务时，连上的会是别人的 Chrome，不是我们起的这个。
+  if (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`).then(() => true, () => false)) throw new Error(`调试端口 ${DEBUG_PORT} 已被占用`);
+  const chrome = launch('Chrome', chromePath, ['--headless=new', `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profile}`, '--no-first-run', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
+  const connect = async () => {
+    for (;;) {
+      try { const page = (await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json()).find(x => x.type === 'page'); if (page) return page; } catch { /* 还没起来 */ }
+      await wait(200);
+    }
+  };
+  const page = await within(Promise.race([chrome.early, connect()]), STARTUP_MS, 'Chrome 调试端口连接');
+  ws = new WebSocket(page.webSocketDebuggerUrl);
+  await within(new Promise((resolve, reject) => { ws.addEventListener('open', resolve); ws.addEventListener('error', () => reject(new Error('CDP 连接失败'))); }), STARTUP_MS, 'CDP 连接');
+  ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.id && waiting.has(m.id)) { waiting.get(m.id).resolve(m); waiting.delete(m.id); } });
+  ws.addEventListener('close', () => { for (const { reject } of waiting.values()) reject(new Error('CDP 连接断开')); waiting.clear(); });
+}
 
 const SIZES = { mac: [280, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
@@ -80,7 +115,9 @@ const covered = `(() => { const pane = document.getElementById('tree'), r = pane
   for (let y = r.top + 4; y < r.bottom - 4; y += 8) { const e = document.elementFromPoint(r.left + r.width / 2, y); if (!e?.closest('.row')) miss.push(Math.round(y)); }
   return miss; })()`;
 
+let exitCode = 1;
 try {
+  await start();
   // ---- 断言 ----
   // 有标题（Mac）时：滚到第二页深处，状态存下来，重新载入后恢复到同一个位置，视口里没有空白。
   await open('mac', 'mac', 'light');
@@ -107,10 +144,13 @@ try {
       return { actual: row, per: parseFloat(document.querySelector('.spacer').style.height) / ${ROOT_ROWS} }; })()`);
     check(`${label}：探针量到的行高等于实际行高`, Math.abs(actual - per) < 0.01, `实际 ${actual}，探针 ${per}`);
   };
+  const rowHeight = () => evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`);
   await open('mac', 'mac', 'light');
   await rowCheck('Mac 浅色');
-  await evaluate(`document.documentElement.style.setProperty('--coda-font-size', '20px'); postMessage({ harness: 'theme', kind: 'dark' }, '*')`);
+  check('Mac：13px 时实际行高 26', (await rowHeight()) === 26, String(await rowHeight()));
+  await evaluate(`postMessage({ harness: 'theme', kind: 'dark', fontSize: '20px' }, '*')`);
   await wait(300);
+  check('Mac：字号改 20px 后实际行高 40（字号真的生效了）', (await rowHeight()) === 40, String(await rowHeight()));
   await rowCheck('Mac 换深色并改字号后');
   await open('portrait', 'ios', 'light');
   await rowCheck('iPhone 竖屏');
@@ -213,10 +253,13 @@ try {
       await shoot(`ios-${size}-${theme}-file`);
     }
   }
+  exitCode = failures.length ? 1 : 0;
+  keepShots = true;
+  console.log(`截图：${shots}`);
+  console.log(failures.length ? `失败 ${failures.length} 项` : '全部通过');
+} catch (error) {
+  console.error(`错误：${error.message}`);
 } finally {
-  ws.close();
   await cleanup();
 }
-console.log(`截图：${shots}`);
-console.log(failures.length ? `失败 ${failures.length} 项` : '全部通过');
-process.exit(failures.length ? 1 : 0);
+process.exit(exitCode);
