@@ -19,7 +19,9 @@ Coda 插件：会话旁的文件浏览器。浏览这个会话的工作目录，
 
 ## 安装
 
-在 Coda 的「设置 › 插件 › 从仓库添加…」里填 `sealiu1997/coda_plugins_resource_manager`，版本留空即跟随默认分支。
+在 Coda 的「设置 › 插件 › 商店」里找到「资源管理器」安装；也可以用「从 npm 添加…」填 `@coda-console/resource-manager`。
+
+也可以在「设置 › 插件 › 从仓库添加…」里填 `sealiu1997/coda_plugins_resource_manager`，版本留空即跟随默认分支。
 
 装好后，在会话侧栏的标签里打开「资源管理器」。
 
@@ -28,7 +30,7 @@ Coda 插件：会话旁的文件浏览器。浏览这个会话的工作目录，
 不需要安装依赖，也没有构建步骤。Node 由 Coda 提供（`$CODA_NODE`）。
 
 ```sh
-# 测试。Node 24 上不能写成 node --test test/
+# 测试，也可以用 npm test。Node 24 上不能写成 node --test test/
 "$CODA_NODE" --test test/*.test.mjs
 
 # 不进 Coda，用假的 window.coda 在浏览器里看真实页面
@@ -48,6 +50,15 @@ npx --yes github:coda-console/coda-plugins#<提交> . --manifest
 - [二期设计](docs/design/phase-2.md)：iPhone 适配和独立文件视图。
 - [可选需求清单](docs/backlog.md)：之后可能做的需求。
 - [评审准则](.coda/review.md)。
+
+## 发布
+
+1. 改 `package.json` 的 `version`，合并到 `main`。
+2. 运行 `gh workflow run publish.yml --ref main`。工作流先看这个版本是不是已在 npm 上，已有就跳过。
+
+工作流用 npm 可信发布，不需要令牌。只有手动运行才会发布，合并到 `main` 不会自动发布。
+
+首次发布要先有包，可信发布才能配置：在本机 `npm login` 后手动运行 `npm publish --access public`，再到 npm 上 `@coda-console/resource-manager` 的设置里配置可信发布，仓库填 `sealiu1997/coda_plugins_resource_manager`，流程文件填 `publish.yml`。之后就按上面的步骤走。
 
 ## 许可
 

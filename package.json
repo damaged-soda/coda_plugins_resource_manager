@@ -1,6 +1,6 @@
 {
   "id": "resource-manager",
-  "name": "resource-manager",
+  "name": "@coda-console/resource-manager",
   "displayName": "资源管理器",
   "description": "会话旁的只读文件浏览器：浏览会话工作目录，预览文本和图片，把路径交给对话。",
   "version": "0.2.0",
@@ -9,6 +9,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sealiu1997/coda_plugins_resource_manager.git"
+  },
+  "publishConfig": { "access": "public" },
+  "files": ["main.mjs", "lib", "view"],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check:coda": "npx --yes @coda-console/plugin-check@0.5.31 . --manifest"
   },
   "main": "main.mjs",
   "contributes": {
