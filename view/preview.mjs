@@ -66,10 +66,21 @@ const h = (tag, attributes = {}, ...children) => {
 export function mountPreview(el, { read, copy }) {
   const name = h('div', { class: 'pname truncate' }), meta = h('div', { class: 'pmeta caption secondary truncate' }, ' ');
   const copyButton = h('button', { class: 'link', onclick: () => path !== null && copy(path) }, '复制路径');
+  const retryButton = h('button', { class: 'link', onclick: () => load(null, true), hidden: true }, '重试');
   const body = h('div', { class: 'pbody' });
-  el.replaceChildren(h('div', { class: 'phead' }, h('div', { class: 'grow' }, name, meta), copyButton), body);
+  el.replaceChildren(h('div', { class: 'phead' }, h('div', { class: 'grow' }, name, meta), retryButton, copyButton), body);
 
   let path = null, token = 0, shown = null, objectUrl = null; // shown：当前显示的 { size, mtimeMs }
+  let metaText = ' ', stale = null; // stale：后台刷新失败的原因，此时正文还是上次的
+  // 更新失败的提示占用元信息那一行，重试按钮在头部，所以正文不会被顶动。
+  const paintMeta = () => {
+    meta.textContent = stale ? `更新失败：${stale}` : metaText;
+    meta.title = stale ?? '';
+    meta.classList.toggle('warn', stale !== null);
+    retryButton.hidden = stale === null;
+  };
+  const setMeta = text => { metaText = text; stale = null; paintMeta(); };
+  const setStale = reason => { stale = reason; paintMeta(); };
   const revoke = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = null; };
   const notice = (title, detail, action) => body.replaceChildren(h('div', { class: 'empty' },
     h('p', {}, title), detail ? h('p', { class: 'secondary' }, detail) : null,
@@ -79,7 +90,7 @@ export function mountPreview(el, { read, copy }) {
     revoke();
     shown = { size: result.size, mtimeMs: result.mtimeMs };
     const note = result.truncated ? `只显示前 ${formatSize(TEXT_LIMIT)}` : '';
-    meta.textContent = [formatSize(result.size), formatTime(result.mtimeMs), note].filter(Boolean).join(' · ');
+    setMeta([formatSize(result.size), formatTime(result.mtimeMs), note].filter(Boolean).join(' · '));
     if (result.kind === ContentKind.TEXT) {
       const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' }, Array.from({ length: lineCount(result.text) }, (_, i) => i + 1).join('\n'));
       body.replaceChildren(h('div', { class: 'code' }, gutter, h('pre', { class: 'text selectable' }, result.text)));
@@ -94,21 +105,22 @@ export function mountPreview(el, { read, copy }) {
 
   function failure(error, silent, retry) {
     if (error.stale) return;
-    if (error.code === ErrorCode.NOT_FOUND) { shown = null; meta.textContent = ' '; return notice('文件已不存在', path); }
-    if (silent && shown) return; // 后台刷新失败，保留已有内容
+    if (error.code === ErrorCode.NOT_FOUND) { shown = null; setMeta(' '); return notice('文件已不存在', path); }
+    if (silent && shown) return setStale(error.message); // 后台刷新失败：保留正文，提示原因
     notice('读不到这个文件', error.message, { label: '重试', run: retry });
   }
 
   // silent：刷新。没变化不重画；变了就换内容，并尽量留在原来的滚动位置。
   async function load(scroll, silent) {
     const mine = ++token, mark = () => mine === token;
-    if (!silent) { shown = null; meta.textContent = '读取中…'; revoke(); body.replaceChildren(); }
+    if (!silent) { shown = null; setMeta('读取中…'); revoke(); body.replaceChildren(); }
     try {
       const result = await readFile(offset => read(path, offset), {
         prev: silent ? shown : null, cancelled: () => !mark(),
-        onProgress: (got, total) => { if (mark() && !silent && total > TEXT_LIMIT / 4) meta.textContent = `读取中 ${formatSize(got)} / ${formatSize(total)}`; },
+        onProgress: (got, total) => { if (mark() && !silent && total > TEXT_LIMIT / 4) setMeta(`读取中 ${formatSize(got)} / ${formatSize(total)}`); },
       });
-      if (!mark() || result.cancelled || result.same) return;
+      if (!mark() || result.cancelled) return;
+      if (result.same) return setStale(null);
       const keep = scroll ?? { top: body.scrollTop, left: body.scrollLeft };
       show(result);
       body.scrollTop = keep.top; body.scrollLeft = keep.left;
@@ -120,7 +132,9 @@ export function mountPreview(el, { read, copy }) {
   return {
     open(next, scroll = null) { path = next; name.textContent = next.split('/').pop(); name.title = next; return load(scroll, false); },
     refresh() { return path === null ? undefined : load(null, true); },
-    close() { token++; path = null; shown = null; revoke(); body.replaceChildren(); },
+    // 内容的来源变了（根目录换了位置）：旧正文不能留，也不能按元数据判断「没变」。
+    reload() { return path === null ? undefined : load(null, false); },
+    close() { token++; path = null; shown = null; setMeta(' '); revoke(); body.replaceChildren(); },
     scroll: () => ({ top: body.scrollTop, left: body.scrollLeft }),
     onScroll: fn => body.addEventListener('scroll', fn, { passive: true }),
     get path() { return path; },

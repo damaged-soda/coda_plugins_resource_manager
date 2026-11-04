@@ -1,5 +1,5 @@
 // 资源管理器的页面入口：消息收发、状态保留、工具栏。状态在 model.mjs，渲染在 tree.mjs 和 preview.mjs。
-import { Link, Model, STATE_LIMIT, parseState, putSession, trimState } from './model.mjs';
+import { Link, Model, STATE_LIMIT, TIMEOUT_MS, parseState, putSession, trimState } from './model.mjs';
 import { mountPreview } from './preview.mjs';
 import { RootState, Type } from './protocol.mjs';
 import { mountTree } from './tree.mjs';
@@ -47,13 +47,31 @@ function noticeText() {
   }[root.state] ?? '';
 }
 
+// 说明区只在内容变了才重画，免得重试按钮在点击中途被换掉。
+let noticeKey = null;
+function paintNotice() {
+  const failed = helloFailure !== null && !model.root;
+  const key = failed ? `hello:${helloFailure}` : noticeText();
+  if (key === noticeKey) return;
+  noticeKey = key;
+  if (!failed) { $('notice').textContent = key; return; }
+  const retry = document.createElement('button'), title = document.createElement('p'), reason = document.createElement('p');
+  title.textContent = '没有连上资源管理器的后台';
+  reason.className = 'secondary';
+  reason.textContent = helloFailure;
+  retry.className = 'link';
+  retry.textContent = '重试';
+  retry.addEventListener('click', sayHello);
+  $('notice').replaceChildren(title, reason, retry);
+}
+
 function render() {
   const current = mode();
   for (const [id, name] of [['tree', 'tree'], ['preview', 'preview'], ['notice', 'notice']]) {
     $(id).classList.toggle('off', current !== name);
     $(id).inert = current !== name;
   }
-  if (current === 'notice') $('notice').textContent = noticeText();
+  if (current === 'notice') paintNotice();
   tree.render();
   if (current === 'preview' && preview.path !== model.selected) {
     preview.open(model.selected, pending.preview);
@@ -139,11 +157,30 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') hide
 window.addEventListener('blur', hideMenu);
 $('tree').addEventListener('scroll', hideMenu, { passive: true });
 
+// ---- 启动握手：hello 一直没有回答，就给出原因和重试 ----
+let helloAnswered = false, helloTimer = null, helloFailure = null;
+function failHello(reason) {
+  if (helloAnswered) return;
+  clearTimeout(helloTimer);
+  helloFailure = reason;
+  schedule();
+}
+async function sayHello() {
+  clearTimeout(helloTimer);
+  helloFailure = null;
+  helloTimer = setTimeout(() => failHello('30 秒没有收到回答'), TIMEOUT_MS);
+  schedule();
+  try { await coda.postMessage({ type: Type.HELLO }); } catch { failHello('消息发不出去'); }
+}
+
 // ---- 模块的消息 ----
 window.addEventListener('message', ({ data }) => {
   if (!data || typeof data !== 'object') return;
   switch (data.type) {
     case Type.SESSION: {
+      helloAnswered = true;
+      clearTimeout(helloTimer);
+      helloFailure = null;
       saveNow(); // 先存旧会话
       preview.close();
       hideMenu();
@@ -153,9 +190,10 @@ window.addEventListener('message', ({ data }) => {
       return;
     }
     case Type.ROOT: {
+      const before = model.root;
       const done = model.receive(data);
       if (done && data.state === RootState.READY) {
-        preview.refresh();
+        if (before?.path !== data.path) preview.reload(); else preview.refresh();
         const { generation } = link;
         done.then(() => {
           if (link.generation !== generation || pending.tree === null) return;
@@ -176,4 +214,4 @@ window.addEventListener('message', ({ data }) => {
 tree.remeasure();
 quiet(() => coda.on('theme', () => tree.remeasure()));
 render();
-Promise.resolve(quiet(() => coda.postMessage({ type: Type.HELLO }))).catch(() => {});
+sayHello();

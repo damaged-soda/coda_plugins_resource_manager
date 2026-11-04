@@ -63,3 +63,4 @@ p { margin: 0; }
   background: var(--coda-card, var(--coda-background, #fff)); }
 .menu button { display: block; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
 .menu button:hover { background: var(--coda-selection, var(--hover)); }
+.pmeta.warn { color: var(--coda-orange, #b25000); }
