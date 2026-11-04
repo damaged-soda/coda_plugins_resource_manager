@@ -60,6 +60,6 @@ p { margin: 0; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
 .menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
-  background: var(--coda-card, var(--coda-background, #fff)); box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+  background: var(--coda-card, var(--coda-background, #fff)); }
 .menu button { display: block; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
 .menu button:hover { background: var(--coda-selection, var(--hover)); }

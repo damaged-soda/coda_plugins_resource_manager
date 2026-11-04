@@ -240,6 +240,17 @@ test('toggle：收起时同时收起下级，展开立即请求', async () => {
   assert.deepEqual([...t.model.expanded, ...t.model.dirs.keys()], ['']);
 });
 
+test('目录收起后才到的 listed 不进状态', async () => {
+  const t = manual();
+  await ready(t);
+  t.model.toggle('src');
+  const [request] = await t.lists('src');
+  t.model.toggle('src');
+  t.reply(request, entries(['late.txt']));
+  await flush();
+  assert.equal(t.model.dirs.has('src'), false);
+});
+
 test('状态裁剪：不超过上限，先淘汰最旧的会话，当前会话优先，超限不抛', () => {
   const state = parseState(null);
   const record = n => ({ expanded: Array.from({ length: n }, (_, i) => `d${i}`), selected: null, scroll: { tree: 0, top: 0, left: 0 } });
