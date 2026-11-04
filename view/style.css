@@ -1,0 +1,66 @@
+/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（docs/plugins.md「视图」）。 */
+:root {
+  --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
+  --line: var(--coda-separator, rgba(0,0,0,.1));
+  --row-h: calc(var(--coda-font-size, 13px) * 1.9);
+  --indent: 12px; --pad: 8px;
+  font: var(--coda-font-size, 13px)/1.45 var(--coda-font, -apple-system, system-ui, sans-serif);
+  color: var(--coda-foreground, #1d1d1f); background: transparent;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none; }
+.selectable { -webkit-user-select: text; user-select: text; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--coda-accent, #0a84ff); outline-offset: 2px; border-radius: 6px; }
+button.link { color: var(--coda-accent, #0a84ff); }
+p { margin: 0; }
+.secondary { color: var(--coda-secondary, #6e6e73); }
+.caption { font-size: .85em; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[hidden] { display: none !important; }
+
+/* 三个面板叠在同一处，只切可见性：隐藏的树保留滚动位置，切换不改变布局。 */
+#stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.pane { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: env(safe-area-inset-bottom); }
+.pane.off { visibility: hidden; pointer-events: none; }
+.empty { display: grid; align-content: start; justify-items: center; gap: 6px; padding: 32px 20px; text-align: center; }
+
+.bar { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.bar button { padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
+.bar button:hover { background: var(--hover); }
+.bar button.on { color: var(--coda-accent, #0a84ff); }
+
+/* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。 */
+.spacer { position: relative; }
+.win { position: absolute; left: 0; right: 0; top: 0; }
+.row { display: flex; align-items: center; gap: 4px; height: var(--row-h); padding-right: 8px; white-space: nowrap; cursor: default; }
+.row.entry:hover { background: var(--hover); }
+.row.sel { background: var(--coda-selection, var(--hover)); }
+.row.more, .row.retry { color: var(--coda-accent, #0a84ff); cursor: pointer; }
+.row.status { color: var(--coda-secondary, #6e6e73); }
+.row.dead .name { color: var(--coda-tertiary, #a1a1a6); }
+.chev { flex: none; width: 14px; text-align: center; font-size: .8em; color: var(--coda-secondary, #6e6e73); }
+.name { flex: 1 1 auto; min-width: 0; }
+.tail { flex: none; width: 1em; text-align: center; color: var(--coda-secondary, #6e6e73); }
+.tail.warn { color: var(--coda-orange, #b25000); }
+
+/* 预览：头部永远占一行名字加一行说明，加载和失败只换下面的内容。 */
+.preview { display: flex; flex-direction: column; overflow: hidden; }
+.phead { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.pname { font-weight: 600; }
+.pbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.code { display: flex; width: max-content; min-width: 100%; font: .9em/1.55 var(--coda-mono, ui-monospace, Menlo, monospace); }
+.code pre { margin: 0; font: inherit; }
+.gutter { position: sticky; left: 0; flex: none; padding: 6px 8px 6px 12px; text-align: right; background: var(--coda-background, #fff);
+  color: var(--coda-tertiary, #a1a1a6); -webkit-user-select: none; user-select: none; }
+.text { flex: 1 0 auto; padding: 6px 12px 6px 4px; tab-size: 4; }
+.image { display: grid; place-items: start center; padding: 12px; }
+.image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
+
+.menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
+  background: var(--coda-card, var(--coda-background, #fff)); }
+.menu button { display: block; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
+.menu button:hover { background: var(--coda-selection, var(--hover)); }
+.pmeta.warn { color: var(--coda-orange, #b25000); }

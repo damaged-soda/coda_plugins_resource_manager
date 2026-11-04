@@ -1,0 +1,19 @@
+{
+  "id": "resource-manager",
+  "name": "resource-manager",
+  "displayName": "资源管理器",
+  "description": "会话旁的只读文件浏览器：浏览会话工作目录，预览文本和图片，把路径交给对话。",
+  "version": "0.1.0",
+  "categories": ["工作流程"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sealiu1997/coda_plugins_resource_manager.git"
+  },
+  "main": "main.mjs",
+  "contributes": {
+    "views": [
+      { "id": "files", "title": "资源管理器", "entry": "view/index.html", "in": ["side"], "icon": "folder" }
+    ]
+  }
+}
