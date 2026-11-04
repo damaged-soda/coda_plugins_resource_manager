@@ -2,8 +2,8 @@
 :root {
   --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
   --line: var(--coda-separator, rgba(0,0,0,.1));
-  --row-h: calc(var(--coda-font-size, 13px) * 1.9);
-  --indent: 12px; --pad: 8px;
+  --row-h: calc(var(--coda-font-size, 13px) * 2);
+  --indent: 12px; --pad: 6px;
   /* 安全区：横屏时客户端不替页面留，页面自己按这几个值留白；变量便于 harness 模拟。 */
   --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
@@ -35,17 +35,29 @@ p { margin: 0; }
 .bar button { padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
 .bar button.on { color: var(--coda-accent, #0a84ff); }
 
-/* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。 */
-.spacer { position: relative; }
+/* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。
+   Mac 是侧栏列表：左右缩进 8 点，行有圆角，选中用 --coda-selection。 */
+.section { padding: 10px 16px 4px; font-size: .85em; font-weight: 600; color: var(--coda-secondary, #6e6e73); cursor: default; }
+.spacer { position: relative; margin: 0 8px; }
 .win { position: absolute; left: 0; right: 0; top: 0; }
-.row { display: flex; align-items: center; gap: 4px; height: var(--row-h); padding-right: 8px; white-space: nowrap; cursor: default; }
+/* 缩进按行的 --d（深度）算，iPhone 的分隔线起点也用它。 */
+.row { position: relative; display: flex; align-items: center; gap: 4px; height: var(--row-h); padding: 0 8px 0 calc(var(--indent) * var(--d, 0) + var(--pad));
+  border-radius: var(--coda-radius, 6px); white-space: nowrap; cursor: default; }
 .row.sel { background: var(--coda-selection, var(--hover)); }
 .row.more, .row.retry { color: var(--coda-accent, #0a84ff); cursor: pointer; }
 .row.status { display: block; overflow: hidden; text-overflow: ellipsis; line-height: var(--row-h); color: var(--coda-secondary, #6e6e73); }
-.row.dead .name { color: var(--coda-tertiary, #a1a1a6); }
-.chev { flex: none; width: 14px; text-align: center; font-size: .8em; color: var(--coda-secondary, #6e6e73); }
+.row.dead .name, .row.dead .ico { color: var(--coda-tertiary, #a1a1a6); }
+.chev { flex: none; display: grid; place-items: center; width: 14px; font-size: .8em; color: var(--coda-secondary, #6e6e73); }
+.chev svg { display: block; }
+.row.open .chev svg { transform: rotate(90deg); }
+.row.file .chev svg { visibility: hidden; } /* Mac 的文件只留空槽，名字才对齐 */
+.ico { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
+.ico svg { display: block; }
+.row.dir .ico { color: var(--coda-accent, #0a84ff); }
 .name { flex: 1 1 auto; min-width: 0; }
-.tail { flex: none; width: 1em; text-align: center; color: var(--coda-secondary, #6e6e73); }
+.tail { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
+.tail:empty { display: none; }
+.tail svg { display: block; }
 .tail.warn { color: var(--coda-orange, #b25000); }
 
 /* 预览：头部永远占一行名字加一行说明，加载和失败只换下面的内容。 */
@@ -77,15 +89,28 @@ p { margin: 0; }
 @media (hover: hover) {
   .bar button:hover { background: var(--hover); }
   .row.entry:hover { background: var(--hover); }
+  .row.entry.sel:hover { background: var(--coda-selection, var(--hover)); }
   .menu button:hover { background: var(--coda-selection, var(--hover)); }
 }
 
-/* iPhone：行和按钮至少 44 点；行高在这里定，tree.mjs 量 .row 得到，不另写一份。 */
+/* iPhone：行和按钮至少 44 点；行高在这里定，tree.mjs 量 .row 得到，不另写一份。
+   目录树是 Coda 卡片外形的分组列表：.spacer 就是卡片（高度已等于全部行高），首尾圆角不用逐行判断。 */
 .coda-ios { --row-h: 44px; --indent: 20px; --pad: 16px; }
-.coda-ios .row { padding-right: 16px; gap: 8px; }
-.coda-ios .chev { width: 24px; }
+.coda-ios .section { display: none; } /* 根目录名归页内工具条 */
+.coda-ios .spacer { margin: 8px 16px; overflow: hidden; border-radius: var(--coda-radius-card, 12px); background: var(--coda-card, var(--coda-secondary-background, #fff)); }
+/* 描边用伪元素：不占尺寸，spacer 加 border 会让内容区少 2 点，末行被裁。 */
+.coda-ios .spacer::after { content: ''; position: absolute; inset: 0; border: 1px solid var(--coda-outline, var(--line)); border-radius: inherit; pointer-events: none; }
+.coda-ios .row { gap: 8px; padding-right: 16px; border-radius: 0; }
+.coda-ios .row + .row::before { content: ''; position: absolute; top: 0; right: 0; height: 1px; background: var(--coda-separator, var(--line));
+  left: calc(var(--pad) + var(--indent) * var(--d, 0) + 22px + 8px); } /* 从图标之后开始 */
+.coda-ios .row.sel + .row::before, .coda-ios .row.sel::before { background: transparent; }
 .coda-ios .row { -webkit-touch-callout: none; } /* 长按由页面接管，不弹系统菜单；选择和拖动另外已关 */
 .coda-ios .row.entry:active { background: var(--hover); }
+.coda-ios .ico svg { width: 22px; height: 22px; }
+.coda-ios .chev { order: 9; width: 14px; }
+.coda-ios .row.dir .chev { color: var(--coda-accent, #0a84ff); }
+.coda-ios .row.file .chev svg { visibility: visible; }
+.coda-ios .row.dead .chev { display: none; }
 .coda-ios .bar { gap: 8px; padding: 4px 8px; }
 .coda-ios button { min-height: 44px; min-width: 44px; }
 .coda-ios .bar button { padding: 0 12px; border-radius: var(--coda-radius, 10px); }

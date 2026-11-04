@@ -22,6 +22,7 @@ export class Element extends Emitter {
   clientHeight = 0;
   offsetWidth = 100;
   offsetHeight = 100;
+  offsetTop = 0;
   inert = false;
 
   constructor(tag) {
@@ -107,7 +108,7 @@ export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree'
   const windowEmitter = new Emitter(), documentEmitter = new Emitter();
   const dom = {
     window: Object.assign(windowEmitter, { coda }),
-    document: Object.assign(documentEmitter, { getElementById: id => elements[id], createElement: tag => new Element(tag) }),
+    document: Object.assign(documentEmitter, { getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag) }),
     innerWidth: 320,
     innerHeight: 600,
     ResizeObserver: class { observe() {} },

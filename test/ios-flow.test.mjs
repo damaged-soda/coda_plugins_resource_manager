@@ -44,7 +44,7 @@ test('树 → 文件页 → 回到树：展开、已加载的条数、滚动位�
   const rowH = 24; // 假 DOM 量出的行高
   entryRows(one.page).find(node => node.textContent.includes('sub')).dispatch('click');
   await waitFor(() => entryRows(one.page).some(node => node.textContent.includes('x.txt')), '展开 sub');
-  const total = () => one.page.tree.children[0].style.height;
+  const total = () => one.page.tree.children[1].style.height;
   const firstPage = parseInt(total(), 10) / rowH;
   assert.ok(firstPage < COUNT + 2, '第一页放不下全部');
   scrollTo(one.page, (firstPage - 3) * rowH);
@@ -74,7 +74,7 @@ test('树 → 文件页 → 回到树：展开、已加载的条数、滚动位�
   const state = one.saved.at(-1);
   assert.ok(state.sessions.A.loaded[''] > firstPage - 2, '状态里存的是条数');
   const two = await mountTree(t, fake, state, []);
-  await waitFor(() => parseInt(two.page.tree.children[0].style.height, 10) / rowH === COUNT + 2, '取够条数');
+  await waitFor(() => parseInt(two.page.tree.children[1].style.height, 10) / rowH === COUNT + 2, '取够条数');
   assert.equal(two.page.tree.scrollTop, (firstPage + 100) * rowH);
   scrollTo(two.page, 0);
   assert.ok(entryRows(two.page).some(node => node.textContent.includes('x.txt')), 'sub 仍然展开');
