@@ -121,6 +121,7 @@ export class Model {
 
   // 取够已加载的条数，一次替换；同目录有更新的请求就作废这一个。
   async #reload(path, generation) {
+    if (this.link.generation !== generation) return; // 排队时会话已换，旧任务不碰新会话
     let dir = this.dirs.get(path);
     if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0 });
     const token = ++dir.token, want = dir.entries.length;
@@ -132,6 +133,7 @@ export class Model {
       let next = null;
       do {
         const reply = await this.link.call('list', { path, cursor: next });
+        if (this.link.generation !== generation) return; // 回答到了、继续前会话换了，不再取下一页
         entries.push(...reply.entries);
         next = reply.nextCursor ?? null;
       } while (next && entries.length < want);

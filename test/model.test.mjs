@@ -157,6 +157,99 @@ test('刷新并行不超过 8 个，全部取回', async () => {
   assert.equal(t.model.dirs.get('d19').loaded, true);
 });
 
+// 切换会话时 A 的刷新队列还没跑完：旧任务不能对新会话发请求或改状态。
+const dirNames = count => Array.from({ length: count }, (_, i) => `d${i}`);
+
+// A 展开 count 个目录并开始刷新，此时 8 个请求在途、其余在队列里。
+async function refreshingA(t, count) {
+  const names = dirNames(count);
+  await ready(t, 1, names.map(d => `${d}/`));
+  t.model.expanded = new Set(names);
+  t.model.refresh();
+  await flush();
+  assert.equal(t.link.pending.size, MAX_PARALLEL);
+}
+
+// 回答当前代次的全部请求直到没有新的，返回收到的请求。
+async function drain(t, listing) {
+  const answered = new Set();
+  for (;;) {
+    await flush();
+    const open = t.sent.filter(m => m.generation === t.link.generation && !answered.has(m.requestId));
+    if (!open.length) return t.sent.filter(m => answered.has(m.requestId));
+    for (const request of open) { answered.add(request.requestId); t.reply(request, entries(request.path === '' ? listing : ['f'])); }
+  }
+}
+
+const countBy = (requests, generation) => {
+  const counts = {};
+  for (const m of requests) if (m.generation === generation) counts[m.path] = (counts[m.path] ?? 0) + 1;
+  return counts;
+};
+
+function assertSettled(t, paths) {
+  assert.equal(t.link.pending.size, 0);
+  assert.deepEqual([...t.model.dirs.keys()].sort(), ['', ...paths].sort());
+  for (const [path, dir] of t.model.dirs) assert.deepEqual([dir.loaded, dir.loading], [true, false], path);
+}
+
+for (const [title, between] of [['session 和 root 同一拍到达', false], ['session 和 root 之间微任务跑完', true]]) {
+  test(`切换会话：A 的刷新队列不影响 B（${title}）`, async () => {
+    const t = manual();
+    await refreshingA(t, 9);
+    const before = t.sent.length;
+    t.session(2, 'B', { expanded: ['d8'] });
+    if (between) await flush();
+    t.root(2);
+    await drain(t, dirNames(9).map(d => `${d}/`));
+    assert.deepEqual(countBy(t.sent.slice(before), 2), { '': 1, d8: 1 });
+    assertSettled(t, ['d8']);
+  });
+}
+
+test('切换会话：A 的队列有 17 项以上，第二批旧任务晚于 B 的刷新也不影响 B', async () => {
+  const t = manual();
+  await refreshingA(t, 20);
+  const before = t.sent.length;
+  t.session(2, 'B', { expanded: ['d19'] });
+  t.root(2);
+  await drain(t, dirNames(20).map(d => `${d}/`));
+  assert.deepEqual(countBy(t.sent.slice(before), 2), { '': 1, d19: 1 });
+  assertSettled(t, ['d19']);
+});
+
+test('切换会话：A→B→A，第二次 A 的刷新不受第一次 A 的旧任务影响', async () => {
+  const t = manual();
+  await refreshingA(t, 20);
+  const before = t.sent.length, listing = dirNames(20).map(d => `${d}/`);
+  t.session(2, 'B', { expanded: [] });
+  t.root(2);
+  t.session(3, 'A', { expanded: dirNames(20) });
+  t.root(3);
+  await drain(t, listing);
+  const requests = t.sent.slice(before);
+  assert.deepEqual(countBy(requests, 2), { '': 1 }, 'B 只发过自己的根请求，已被后来的 A 作废');
+  assert.deepEqual(countBy(requests, 3), Object.fromEntries(['', ...dirNames(20)].map(p => [p, 1])));
+  assertSettled(t, dirNames(20));
+});
+
+test('切换会话：回答已到、继续前会话换了，不再取下一页', async () => {
+  const t = manual();
+  await ready(t, 1, ['src/']);
+  t.model.toggle('src');
+  t.reply((await t.lists('src'))[0], entries(['a', 'b']));
+  await flush();
+  t.model.dirs.get('src').entries = [{ name: 'a', kind: 'file' }, { name: 'b', kind: 'file' }];
+  const start = t.sent.length;
+  t.model.refresh();
+  const first = (await t.lists('src')).at(-1);
+  t.reply(first, entries(['a'], 'c2')); // 不够 2 条，本该继续翻页
+  t.session(2, 'B', { expanded: [] }); // 同一拍切换
+  await flush();
+  assert.deepEqual(t.sent.slice(start).filter(m => m.path === 'src' && m.cursor === 'c2'), []);
+  assert.equal(t.link.pending.size, 0);
+});
+
 test('隐藏过滤：默认隐藏 .git、.DS_Store，开关不重新请求', async () => {
   const t = manual();
   await ready(t, 1, ['.git/', 'src/', '.DS_Store', '.gitignore', 'a.txt']);
