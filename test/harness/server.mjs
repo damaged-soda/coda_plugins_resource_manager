@@ -49,7 +49,7 @@ const THEMES = ${JSON.stringify(THEMES)}, listeners = {};
 const query = new URLSearchParams(location.search), isIOS = query.get('platform') === 'ios';
 const applyTheme = (kind, fontSize) => { const root = document.documentElement; root.className = (isIOS ? 'coda-ios' : 'coda-mac') + ' coda-' + kind;
   for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', fontSize || (isIOS ? '17px' : '13px'));
-  root.style.background = 'var(--coda-background)'; // 真实客户端用同一个 surface 垫在透明页面后面（PluginViewSurface）
+  root.style.background = 'var(--coda-background)'; // 真实客户端也把这个底色垫在透明页面后面
   const safe = (query.get('safe') || '').split(',');
   ['top', 'right', 'bottom', 'left'].forEach((side, i) => { if (safe[i]) root.style.setProperty('--safe-' + side, safe[i] + 'px'); });
   root.style.setProperty('--coda-mono', 'ui-monospace, Menlo, monospace'); (listeners.theme || []).forEach(f => f({ kind })); };

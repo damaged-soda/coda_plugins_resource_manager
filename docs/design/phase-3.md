@@ -34,13 +34,9 @@ Markdown 预览暂不排：Coda 原生预览已支持（coda-console/coda#169）
 
 **页面是网页，用不了 SwiftUI**，只能贴近外观和交互。
 
-**颜色**（`Sources/CodaUI/PluginView.swift`、`CodaStyle.swift`）：
+**颜色**：页面的颜色、圆角都取 `--coda-*` 变量，不自己写。页面本身透明，`--coda-background` 对应的底色由客户端垫在后面。
 
-- Mac：`background` 是侧栏那一层；`card` 是向文字色偏几个百分点的一层，`outline` 是系统分隔线色。
-- iPhone：`background` 是 `systemBackground`，`secondary-background` 是 `secondarySystemBackground`；`card` 浅色偏 3%、深色偏 8%，`outline` 是 10% 的文字色。页面的 WebView 透明，`background` 由客户端垫在后面。
-- 界面原则（`docs/ui-principles.md`「外观」）：视图不自己写透明度、圆角和系统底色；卡片只有一种外形，卡片底色加描边、圆角 12；插件网页经 `--coda-card`、`--coda-outline` 拿到同一套。
-
-**由此定下的取舍**：iPhone 的分组卡片用 Coda 的卡片外形（`--coda-card` 加 `--coda-outline`，圆角 `--coda-radius-card`），不学样稿里系统的灰底白卡。系统那套要 `systemGroupedBackground` 一组颜色，插件拿不到；用 `secondary-background` 和 `background` 拼，深色下明暗会反过来。观感和样稿略有不同，以真机为准。
+**由此定下的取舍**：iPhone 的分组卡片用 Coda 给插件的卡片变量（`--coda-card` 加 `--coda-outline`，圆角 `--coda-radius-card`），不学样稿里系统的灰底白卡。系统分组列表那组颜色插件拿不到；用 `--coda-secondary-background` 和 `--coda-background` 拼，深色下明暗会反过来。观感和样稿略有不同，以真机为准。
 
 **图标**：Mac 工具栏项目是原生的，继续用 SF Symbol（`icon` 字段）。页面里自己画形状相近的 SVG：网页里没有这套符号，也不把 Apple 的符号打包进来。颜色都用 `currentColor`。
 
@@ -138,14 +134,14 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 **Mac 的工具条**（作者定，和 iPhone 对齐）：
 
 - 目录树和侧栏预览都只声明一个 `coda.toolbar` 按钮：`{ id: 'more', label: '更多', icon: 'ellipsis', kind: 'button' }`。按下后页面弹出 `openMenu` 菜单，内容和 iPhone 的 `⋯` 相同，贴页面右上角。
-- 不用原生菜单（`kind: 'menu'`）：作者实测它带向下的箭头，这是 SwiftUI `Menu` 的默认样式，客户端没有隐藏，插件关不掉；标题也只能写成文字 `⋯`。原生按钮在侧栏里只显示图标（`.labelStyle(.iconOnly)`），没有箭头，提示和读屏是「更多」（作者定）。
+- 不用原生菜单（`kind: 'menu'`）：作者实测它带向下的箭头，这是 SwiftUI `Menu` 的默认样式，客户端没有隐藏，插件关不掉；标题也只能写成文字 `⋯`。原生按钮在侧栏里只显示图标，没有箭头，提示和读屏是「更多」（作者定）。
 - 菜单开着时再按一次是关闭。页面可能在点原生按钮时先失焦（现有规则失焦会关菜单），那样再按会又打开；这一点只能真机确认，影响小，不加特殊处理。
 - 独立文件窗口只有刷新一项，还是单个按钮，不改。
 - 没有 `coda.toolbar` 也不是 iPhone 的情况（harness）照旧退成页内一条，刷新和显示隐藏文件分开。
 
 **Mac 的返回键**（作者定）：原生工具栏项目只能放在右侧，所以放进页面，在侧栏预览头部的最左边，用图标按钮和 Mac 的悬停样式，`aria-label` 和 `title` 都是「返回」。工具栏不再有返回。独立窗口和 iPhone 文件页不显示。只有用户点这个按钮、且页面持有焦点（`document.hasFocus()`）时，才把焦点移到目录树；后台刷新、切会话等模式变化不动焦点，免得抢走客户端输入框的焦点。
 
-**iPhone 的返回不改**（作者定）：文件页仍是推入一层。作者实测时觉得系统返回会直接回到会话；客户端的资源管理器走会话页的 `navigationDestination(isPresented:)`，`coda.open` 走全局路径 `hub.push`，两条路径混用，可能是原因，未验证。页面内按钮只能调 `coda.close()`，等于系统返回，解决不了。不是一定要解决的问题，记入 `docs/backlog.md`。
+**iPhone 的返回不改**（作者定）：文件页仍是推入一层。作者实测时觉得系统返回会直接回到会话；从会话菜单打开视图和 `coda.open` 打开视图可能走的是客户端两条不同的导航路径，未验证。页面内按钮只能调 `coda.close()`，等于系统返回，解决不了。不是一定要解决的问题，记入 `docs/backlog.md`。
 
 ## 8. 说明区、菜单和提示
 
