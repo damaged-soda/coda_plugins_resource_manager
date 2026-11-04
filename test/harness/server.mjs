@@ -1,5 +1,7 @@
 // 开发用：假 window.coda 把真实页面接到真实模块和真实目录。
 // 用法：node test/harness/server.mjs <会话A的目录> [会话B的目录] [端口]，浏览器打开打印出的地址。
+// 平台与安全区：?platform=ios 时 <html> 带 coda-ios、字号 17px；?safe=上,右,下,左 模拟 env(safe-area-inset-*)（点数，如 0,59,21,59）。
+// 单独打开页面地址（/view/index.html?platform=ios）时，coda.open 跳到文件页、coda.close 返回，可直接用手机尺寸截图。
 // 文件视图：地址后加 ?view=file&session=A&path=相对路径，页面启动值同 coda.open({ view: 'file', args })。
 // 控制页可切深浅色、切会话、触发一轮结束、重新载入页面。不是产品代码，不随插件使用。
 import { createServer } from 'node:http';
@@ -43,12 +45,15 @@ const THEMES = {
 };
 const shim = `
 const THEMES = ${JSON.stringify(THEMES)}, listeners = {};
-const applyTheme = kind => { const root = document.documentElement; root.className = 'coda-mac coda-' + kind;
-  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', '13px');
+const query = new URLSearchParams(location.search), isIOS = query.get('platform') === 'ios';
+const applyTheme = kind => { const root = document.documentElement; root.className = (isIOS ? 'coda-ios' : 'coda-mac') + ' coda-' + kind;
+  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', isIOS ? '17px' : '13px');
+  const safe = (query.get('safe') || '').split(',');
+  ['top', 'right', 'bottom', 'left'].forEach((side, i) => { if (safe[i]) root.style.setProperty('--safe-' + side, safe[i] + 'px'); });
   root.style.setProperty('--coda-mono', 'ui-monospace, Menlo, monospace'); (listeners.theme || []).forEach(f => f({ kind })); };
 const fire = (name, value) => (listeners[name] || []).forEach(f => f(value));
-const key = 'harness-state';
-const query = new URLSearchParams(location.search), isFile = location.pathname.endsWith('/file.html');
+const isFile = location.pathname.endsWith('/file.html');
+const key = 'harness-state:' + (isFile ? 'file:' : 'files') + (isFile ? query.get('session') + query.get('path') : '');
 const startArgs = isFile ? { session: query.get('session') ?? undefined, path: query.get('path') ?? undefined } : null;
 window.coda = { platform: query.get('platform') || 'mac', plugin: 'resource-manager', view: isFile ? 'file' : 'files', args: startArgs,
   postMessage: message => opened.then(() => fetch('/rpc?id=' + connection, { method: 'POST', body: JSON.stringify(message) })).then(() => undefined),
@@ -56,7 +61,10 @@ window.coda = { platform: query.get('platform') || 'mac', plugin: 'resource-mana
   setState: value => { const text = JSON.stringify(value); if (text.length > 128 * 1024) throw new Error('状态超过 128 KiB'); sessionStorage.setItem(key, text); },
   copy: text => parent.postMessage({ harness: 'copy', text }, '*'),
   toolbar: items => parent.postMessage({ harness: 'toolbar', items }, '*'),
-  on: (name, fn) => { (listeners[name] ||= []).push(fn); }, close() {}, open() {} };
+  on: (name, fn) => { (listeners[name] ||= []).push(fn); },
+  close: () => { if (parent === window) history.back(); else parent.postMessage({ harness: 'close' }, '*'); },
+  open: target => { if (parent !== window) return parent.postMessage({ harness: 'open', target }, '*');
+    const next = new URLSearchParams(location.search); next.set('session', target.args.session); next.set('path', target.args.path); location.href = '/view/file.html?' + next; } };
 const connection = Math.random().toString(36).slice(2);
 const events = new EventSource('/events?id=' + connection + '&view=' + (isFile ? 'file' : 'files') + '&args=' + encodeURIComponent(JSON.stringify(startArgs))), opened = new Promise(resolve => events.addEventListener('open', resolve));
 const loaded = new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve));
@@ -77,6 +85,7 @@ let theme = 'light';
 async function ctl(a) { if (a.startsWith('theme:')) { theme = a.slice(6); f.contentWindow.postMessage({ harness: 'theme', kind: theme }, '*'); }
   else if (a === 'reload') f.src = base + '?' + new URLSearchParams({ ...Object.fromEntries(params), theme, t: Date.now() }); else await fetch('/ctl?action=' + a + (fileSession ? '&session=' + fileSession : '')); }
 addEventListener('message', e => { if (e.data?.harness === 'copy') log('copy: ' + e.data.text);
+  if (e.data?.harness === 'open') log('open: ' + JSON.stringify(e.data.target)); if (e.data?.harness === 'close') log('close');
   if (e.data?.harness === 'toolbar') document.getElementById('bar').replaceChildren(...e.data.items.map(i => Object.assign(document.createElement('button'), { textContent: i.label + (i.on ? ' ✓' : ''),
     onclick: () => f.contentWindow.postMessage({ harness: 'toolbar', id: i.id }, '*') }))); });
 </script>`;
