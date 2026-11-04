@@ -52,8 +52,10 @@ export class Element extends Emitter {
   setAttribute(name, value) { if (name === 'class') this.className = value; else this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
 
+  // 焦点：和浏览器一样，聚焦的元素被摘掉后 activeElement 回到没有。
+  focus() { globalThis.document.activeElement = this; }
   replaceChildren(...nodes) {
-    for (const child of this.children) child.parent = null;
+    for (const child of this.children) { if (child.contains?.(globalThis.document?.activeElement)) globalThis.document.activeElement = null; child.parent = null; }
     this.children = [];
     this.append(...nodes);
   }
@@ -74,7 +76,11 @@ export class Element extends Emitter {
   }
   getBoundingClientRect() { return { height: 24, width: 100 }; }
   dispatch(type, init = {}) {
-    const event = { type, target: this, preventDefault() {}, ...init };
+    let stopped = false;
+    const event = { type, target: this, preventDefault() {}, stopPropagation() { stopped = true; }, ...init };
+    // document 上的监听先于元素（页面里都是捕获阶段）；stopPropagation 后元素收不到。
+    globalThis.document?.emit?.(event);
+    if (stopped) return event;
     for (let at = this; at instanceof Element; at = at.parent) at.emit(event);
     return event;
   }
@@ -92,13 +98,12 @@ export function visible(node) {
   return true;
 }
 
-// 装上 window、document 等全局并加载真实的 view/app.mjs，每次得到全新的模块实例。
+// 装上 window、document 等全局并加载真实的页面入口（默认 view/app.mjs），每次得到全新的模块实例。
 let instance = 0;
-export async function loadApp(t, coda) {
-  const ids = ['bar', 'tree', 'preview', 'notice', 'menu'];
+export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu', 'hint'] } = {}) {
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   elements.bar.hidden = true;
-  elements.menu.hidden = true;
+  for (const id of ['menu', 'hint']) if (elements[id]) elements[id].hidden = true;
   const windowEmitter = new Emitter(), documentEmitter = new Emitter();
   const dom = {
     window: Object.assign(windowEmitter, { coda }),
@@ -112,10 +117,12 @@ export async function loadApp(t, coda) {
   t.after(() => {
     for (const [key, descriptor] of Object.entries(saved)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   });
-  await import(`../../view/app.mjs?instance=${++instance}`);
+  await import(`../../view/${entry}?instance=${++instance}`);
   return {
     ...elements,
     // 模块发给页面的消息。
     post: data => windowEmitter.emit({ type: 'message', data }),
   };
 }
+
+export const loadFileApp = (t, coda) => loadApp(t, coda, { entry: 'file-app.mjs', ids: ['bar', 'preview', 'notice'] });

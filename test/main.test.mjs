@@ -367,3 +367,100 @@ test('异常输入不让模块抛出：非对象、未知类型、缺请求号�
   await flush();
   assert.equal(view.of('listed').length, 0);
 });
+
+// ---- 按视图解析会话（file 取 args.session，files 取 context.session）----
+
+async function startedFile(fake, args, session = null) {
+  activate(fake.coda);
+  const view = fake.open(session, { view: 'file', args });
+  view.send({ type: 'hello' });
+  await waitFor(() => view.of('root').length > 0, 'root');
+  return view;
+}
+
+test('file 视图：从 args.session 取会话，并按它的根目录读文件', async t => {
+  const { root } = await repo(t);
+  const fake = fakeCoda({ A: checkoutOf(root), B: checkoutOf('/nowhere') });
+  const view = await startedFile(fake, { session: 'A', path: 'src/a.txt' }, 'B'); // context.session 不起作用
+  assert.deepEqual(view.of('session'), [{ type: 'session', generation: 1, session: 'A' }]);
+  assert.deepEqual(view.lastRoot(), { type: 'root', generation: 1, state: 'ready', path: root });
+  assert.equal(fake.queried('B'), 0);
+  view.send({ type: 'read', generation: 1, requestId: 'r1', path: 'src/a.txt', offset: 0 });
+  assert.equal(Buffer.from((await view.answer('r1')).data, 'base64').toString(), 'hello');
+});
+
+test('file 视图：args 缺失或 session 不是非空字符串时没有会话，不查询', async t => {
+  for (const args of [null, {}, { session: 5 }, { session: null }, { session: '' }, { session: ['A'] }, 'A']) {
+    const { root } = await repo(t);
+    const fake = fakeCoda({ A: checkoutOf(root) });
+    const view = await startedFile(fake, args, 'A');
+    assert.deepEqual(view.of('session'), [{ type: 'session', generation: 1, session: null }], JSON.stringify(args));
+    assert.deepEqual(view.lastRoot(), { type: 'root', generation: 1, state: 'none', path: null }, JSON.stringify(args));
+    assert.equal(fake.api.length, 0);
+  }
+});
+
+test('files 视图：带了 args.session 也只跟随 context.session', async t => {
+  const { root } = await repo(t);
+  const fake = fakeCoda({ A: checkoutOf(root), B: checkoutOf('/nowhere') });
+  activate(fake.coda);
+  const view = fake.open('A', { view: 'files', args: { session: 'B' } });
+  view.send({ type: 'hello' });
+  await waitFor(() => view.of('root').length > 0, 'root');
+  assert.equal(view.of('session')[0].session, 'A');
+  assert.equal(fake.queried('B'), 0);
+  view.switchTo('A', { session: 'B' }); // 只有 args 变了，会话没变
+  await flush();
+  assert.equal(view.of('session').length, 1, '没有换会话');
+  view.switchTo(null, { session: 'A' }); // context.session 为空：args 帮不上忙
+  await waitFor(() => view.of('session').length === 2, '换会话');
+  assert.equal(view.of('session')[1].session, null);
+  assert.equal(view.lastRoot().state, 'none');
+});
+
+test('file 视图：args.session 变了才换会话和代次，旧代次的请求不再回答', async t => {
+  const { root, base } = await repo(t);
+  const fake = fakeCoda({ A: checkoutOf(root), B: checkoutOf(join(base, 'repo-other')) });
+  const view = await startedFile(fake, { session: 'A', path: 'src/a.txt' });
+  view.switchTo(null, { session: 'A', path: 'README.md' }); // 只换文件：会话不变
+  await flush();
+  assert.equal(view.of('session').length, 1);
+  view.switchTo(null, { session: 'B', path: 'secret.txt' });
+  await waitFor(() => view.of('session').length === 2, '换会话');
+  assert.deepEqual(view.of('session')[1], { type: 'session', generation: 2, session: 'B' });
+  await waitFor(() => view.lastRoot().generation === 2, '新根目录');
+  assert.equal(view.lastRoot().path, join(base, 'repo-other'));
+  view.send({ type: 'read', generation: 1, requestId: 'old', path: 'src/a.txt', offset: 0 });
+  view.send({ type: 'read', generation: 2, requestId: 'new', path: 'secret.txt', offset: 0 });
+  assert.equal(Buffer.from((await view.answer('new')).data, 'base64').toString(), 's');
+  assert.equal(view.posted.some(m => m.requestId === 'old'), false);
+});
+
+test('file 视图：读文件受路径校验约束，越界和绝对路径都拒绝', async t => {
+  const { root } = await repo(t);
+  const fake = fakeCoda({ A: checkoutOf(root) });
+  const view = await startedFile(fake, { session: 'A', path: '../repo-other/secret.txt' });
+  const cases = [
+    ['../repo-other/secret.txt', 'invalid_path'], ['/etc/passwd', 'invalid_path'], ['out/secret.txt', 'outside_root'], ['src', 'not_file'],
+  ];
+  for (const [i, [path, code]] of cases.entries()) {
+    view.send({ type: 'read', generation: 1, requestId: `p${i}`, path, offset: 0 });
+    const reply = await view.answer(`p${i}`);
+    assert.equal(reply.error?.code, code, path);
+    assert.equal(reply.data, undefined);
+  }
+});
+
+test('file 视图：本会话一轮结束先查根目录再推 changed；别的会话的不理', async t => {
+  const { root } = await repo(t);
+  const fake = fakeCoda({ A: checkoutOf(root), B: checkoutOf(root) });
+  const view = await startedFile(fake, { session: 'A', path: 'README.md' });
+  const before = fake.queried('A');
+  fake.emit('B', 't'); fake.emit('B', null);
+  fake.emit('A', 't');
+  fake.emit('A', null);
+  await waitFor(() => view.of('changed').length === 1, 'changed');
+  assert.ok(fake.queried('A') > before, '先查询根目录');
+  await flush();
+  assert.equal(view.of('changed').length, 1);
+});

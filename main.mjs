@@ -9,17 +9,26 @@ import {
 
 const POLL_MS = 2000;
 
+// 按视图解析会话（设计见 docs/design/phase-2.md 第 6 节）：
+// 树只跟随侧栏旁的会话，不看 args；文件视图只取 args.session，须是非空字符串，否则当作没有会话。
+const sessionOfTree = context => context?.session ?? null;
+const sessionOfFile = context => {
+  const session = context?.args?.session;
+  return typeof session === 'string' && session !== '' ? session : null;
+};
+
 export function activate(coda) {
-  coda.views.register('files', { open: view => serve(coda, view) });
+  coda.views.register('files', { open: view => serve(coda, view, sessionOfTree) });
+  coda.views.register('file', { open: view => serve(coda, view, sessionOfFile) });
 }
 
 const validRequestId = id => (typeof id === 'string' && id.length <= REQUEST_ID_MAX) || Number.isSafeInteger(id);
 const errorOf = error => (error?.protocol ? { code: error.code, message: error.message } : { code: ErrorCode.IO, message: '读取失败' });
 
-function serve(coda, view) {
+function serve(coda, view, sessionOf) {
   // 代次：每换一次会话加 1，所有异步出口回来后都要核对。
   const s = {
-    session: view.context.session ?? null, generation: 1, root: NO_ROOT, sent: null,
+    session: sessionOf(view.context), generation: 1, root: NO_ROOT, sent: null,
     hello: false, closed: false, rootSeq: 0, poll: null,
   };
   const turns = new Map();
@@ -104,7 +113,7 @@ function serve(coda, view) {
   });
 
   view.onContext(context => {
-    const session = context?.session ?? null;
+    const session = sessionOf(context);
     if (session !== s.session) switchSession(session);
   });
 

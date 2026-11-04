@@ -4,12 +4,16 @@
   --line: var(--coda-separator, rgba(0,0,0,.1));
   --row-h: calc(var(--coda-font-size, 13px) * 1.9);
   --indent: 12px; --pad: 8px;
+  /* 安全区：横屏时客户端不替页面留，页面自己按这几个值留白；变量便于 harness 模拟。 */
+  --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
   font: var(--coda-font-size, 13px)/1.45 var(--coda-font, -apple-system, system-ui, sans-serif);
   color: var(--coda-foreground, #1d1d1f); background: transparent;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none; }
+body { display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none;
+  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left); }
 .selectable { -webkit-user-select: text; user-select: text; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: inherit; cursor: pointer; }
 button:focus-visible { outline: 2px solid var(--coda-accent, #0a84ff); outline-offset: 2px; border-radius: 6px; }
@@ -23,23 +27,21 @@ p { margin: 0; }
 
 /* 三个面板叠在同一处，只切可见性：隐藏的树保留滚动位置，切换不改变布局。 */
 #stage { position: relative; flex: 1 1 auto; min-height: 0; }
-.pane { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: env(safe-area-inset-bottom); }
+.pane { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: var(--safe-bottom); }
 .pane.off { visibility: hidden; pointer-events: none; }
 .empty { display: grid; align-content: start; justify-items: center; gap: 6px; padding: 32px 20px; text-align: center; }
 
 .bar { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .bar button { padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
-.bar button:hover { background: var(--hover); }
 .bar button.on { color: var(--coda-accent, #0a84ff); }
 
 /* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。 */
 .spacer { position: relative; }
 .win { position: absolute; left: 0; right: 0; top: 0; }
 .row { display: flex; align-items: center; gap: 4px; height: var(--row-h); padding-right: 8px; white-space: nowrap; cursor: default; }
-.row.entry:hover { background: var(--hover); }
 .row.sel { background: var(--coda-selection, var(--hover)); }
 .row.more, .row.retry { color: var(--coda-accent, #0a84ff); cursor: pointer; }
-.row.status { color: var(--coda-secondary, #6e6e73); }
+.row.status { display: block; overflow: hidden; text-overflow: ellipsis; line-height: var(--row-h); color: var(--coda-secondary, #6e6e73); }
 .row.dead .name { color: var(--coda-tertiary, #a1a1a6); }
 .chev { flex: none; width: 14px; text-align: center; font-size: .8em; color: var(--coda-secondary, #6e6e73); }
 .name { flex: 1 1 auto; min-width: 0; }
@@ -48,6 +50,7 @@ p { margin: 0; }
 
 /* 预览：头部永远占一行名字加一行说明，加载和失败只换下面的内容。 */
 .preview { display: flex; flex-direction: column; overflow: hidden; }
+.phead button { flex: none; white-space: nowrap; }
 .phead { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .pname { font-weight: 600; }
 .pbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -59,8 +62,37 @@ p { margin: 0; }
 .image { display: grid; place-items: start center; padding: 12px; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
+#notice:focus { outline: none; }
 .menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff)); }
 .menu button { display: block; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
-.menu button:hover { background: var(--coda-selection, var(--hover)); }
+.menu-path { max-width: 280px; padding: 4px 10px 6px; overflow-wrap: anywhere; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
+
+.hint { position: fixed; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 10;
+  padding: 8px 12px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
+  background: var(--coda-card, var(--coda-background, #fff)); color: var(--coda-orange, #b25000); }
+
+/* 悬停只在有鼠标时：触摸后不会留着。 */
+@media (hover: hover) {
+  .bar button:hover { background: var(--hover); }
+  .row.entry:hover { background: var(--hover); }
+  .menu button:hover { background: var(--coda-selection, var(--hover)); }
+}
+
+/* iPhone：行和按钮至少 44 点；行高在这里定，tree.mjs 量 .row 得到，不另写一份。 */
+.coda-ios { --row-h: 44px; --indent: 20px; --pad: 16px; }
+.coda-ios .row { padding-right: 16px; gap: 8px; }
+.coda-ios .chev { width: 24px; }
+.coda-ios .row { -webkit-touch-callout: none; } /* 长按由页面接管，不弹系统菜单；选择和拖动另外已关 */
+.coda-ios .row.entry:active { background: var(--hover); }
+.coda-ios .bar { gap: 8px; padding: 4px 8px; }
+.coda-ios button { min-height: 44px; min-width: 44px; }
+.coda-ios .bar button { padding: 0 12px; border-radius: var(--coda-radius, 10px); }
+.coda-ios .phead { padding: 4px 12px; gap: 4px; }
+.coda-ios .phead button { padding: 0 8px; }
+.coda-ios .menu button { padding: 0 12px; text-align: left; }
+
+/* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
+.exit { display: none; }
+@media (orientation: landscape) and (max-height: 500px) { .coda-ios .exit { display: inline-flex; align-items: center; } }

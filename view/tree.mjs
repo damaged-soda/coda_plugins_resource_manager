@@ -3,6 +3,9 @@ import { EntryKind } from './protocol.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
 const OVERSCAN = 8;
+// 长按：按住这么久、移动不超过这个距离才算。
+export const HOLD_MS = 500;
+export const HOLD_SLOP = 10;
 
 // 行：{ type: 'entry' | 'status' | 'more', path, name, depth, kind, link, open, busy, failed, text }
 export function visibleRows(model) {
@@ -11,6 +14,8 @@ export function visibleRows(model) {
     const state = model.dirs.get(dir);
     if (!state || (!state.loaded && !state.error)) return rows.push({ type: 'status', path: dir, depth, text: '正在读取…' });
     if (!state.loaded) return rows.push({ type: 'status', path: dir, depth, text: `读取失败：${state.error.message}`, retry: true });
+    // 刷新失败：旧条目保留，最上方加一行原因，点它重试。这一行不算内容，空目录的判断在它之后。
+    if (state.error) rows.push({ type: 'status', path: dir, depth, text: `更新失败：${state.error.message}`, retry: true });
     const before = rows.length;
     for (const entry of state.entries) {
       if (!model.showHidden && isHidden(entry.name)) continue;
@@ -31,7 +36,9 @@ export function visibleRows(model) {
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
 // handlers: { open(path), toggle(path), more(path), retry(path), menu(event, path, kind) }
-export function mountTree(el, model, handlers) {
+// draggable：触屏上拖行没有用处，还会抢滚动，关掉。
+// longPress：触屏上按住一行打开 handlers.menu（Mac 用右键）。不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
+export function mountTree(el, model, handlers, { draggable = true, longPress = false } = {}) {
   const spacer = document.createElement('div'), win = document.createElement('div');
   spacer.className = 'spacer'; win.className = 'win';
   spacer.append(win);
@@ -61,7 +68,7 @@ export function mountTree(el, model, handlers) {
     node.style.paddingLeft = `calc(var(--indent) * ${row.depth} + var(--pad))`;
     if (row.type !== 'entry') {
       node.textContent = row.text;
-      if (row.retry) node.classList.add('retry');
+      if (row.retry) { node.classList.add('retry'); node.title = row.text; } // 长原因在行里被截断，Mac 悬停看全
       return node;
     }
     const dead = row.kind === EntryKind.LINK || row.kind === EntryKind.OTHER;
@@ -69,7 +76,7 @@ export function mountTree(el, model, handlers) {
     if (dead) node.classList.add('dead');
     if (row.path === model.selected) node.classList.add('sel');
     if (row.kind === EntryKind.DIR) node.setAttribute('aria-expanded', row.open);
-    if (!dead) node.draggable = true;
+    if (!dead && draggable) node.draggable = true;
     const chevron = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
     chevron.className = 'chev';
     chevron.textContent = row.kind === EntryKind.DIR ? (row.busy ? '…' : row.open ? '▾' : '▸') : '';
@@ -83,7 +90,33 @@ export function mountTree(el, model, handlers) {
   }
 
   const rowOf = event => rows[event.target.closest?.('.row')?.dataset.i];
+
+  // 长按：按下只记一个等待；移动超限、抬起、取消、滚动、第二根手指都作废。
+  // 触发后吞掉紧接着的那次点击；没有点击跟来时，下一次按下清掉，不会误吞后面真正的点击。
+  let hold = null, swallow = false;
+  const cancelHold = () => { if (hold) { clearTimeout(hold.timer); hold = null; } };
+  if (longPress) {
+    el.addEventListener('pointerdown', event => {
+      cancelHold();
+      swallow = false;
+      const row = rowOf(event);
+      if (event.isPrimary === false || row?.type !== 'entry') return;
+      const { clientX: x, clientY: y, pointerId: id } = event;
+      hold = { id, x, y, timer: setTimeout(() => {
+        hold = null;
+        swallow = true;
+        handlers.menu({ clientX: x, clientY: y }, row.path);
+      }, HOLD_MS) };
+    });
+    el.addEventListener('pointermove', event => {
+      if (hold && event.pointerId === hold.id && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > HOLD_SLOP) cancelHold();
+    });
+    for (const type of ['pointerup', 'pointercancel']) el.addEventListener(type, cancelHold);
+    el.addEventListener('scroll', cancelHold, { passive: true });
+  }
+
   el.addEventListener('click', event => {
+    if (swallow) { swallow = false; return; }
     const row = rowOf(event);
     if (!row) return;
     if (row.type === 'more') return handlers.more(row.path);
@@ -109,5 +142,7 @@ export function mountTree(el, model, handlers) {
     remeasure() { measure(); this.render(); },
     scroll: () => el.scrollTop,
     scrollTo(top) { el.scrollTop = top; },
+    // 切会话时调用：长按的等待和吞点击的标记都属于上一个会话。
+    reset() { cancelHold(); swallow = false; },
   };
 }

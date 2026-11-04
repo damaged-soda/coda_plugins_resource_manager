@@ -1,5 +1,8 @@
 // 开发用：假 window.coda 把真实页面接到真实模块和真实目录。
 // 用法：node test/harness/server.mjs <会话A的目录> [会话B的目录] [端口]，浏览器打开打印出的地址。
+// 平台与安全区：?platform=ios 时 <html> 带 coda-ios、字号 17px；?safe=上,右,下,左 模拟 env(safe-area-inset-*)（点数，如 0,59,21,59）。
+// 单独打开页面地址（/view/index.html?platform=ios）时，coda.open 跳到文件页、coda.close 返回，可直接用手机尺寸截图。
+// 文件视图：地址后加 ?view=file&session=A&path=相对路径，页面启动值同 coda.open({ view: 'file', args })。
 // 控制页可切深浅色、切会话、触发一轮结束、重新载入页面。不是产品代码，不随插件使用。
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -22,14 +25,15 @@ activate({
 const emit = (id, turn) => { for (const fn of watchers) fn({ type: 'MODIFIED', id, object: { id, turn } }); };
 let session = 'A';
 
-function openView(send) {
+function openView(send, viewId = 'files', args = null) {
   const handlers = {};
   const view = {
-    context: { session, args: null }, handlers,
+    // 文件视图打开时 context.session 是 null（第 3 节实测），会话在 args 里。
+    context: { session: viewId === 'file' ? null : session, args }, handlers,
     postMessage: message => send('msg', message),
     onMessage: fn => { handlers.message = fn; }, onContext: fn => { handlers.context = fn; }, onClose: fn => { handlers.close = fn; },
   };
-  providers.get('files').open(view);
+  providers.get(viewId).open(view);
   views.add(view);
   return view;
 }
@@ -41,36 +45,47 @@ const THEMES = {
 };
 const shim = `
 const THEMES = ${JSON.stringify(THEMES)}, listeners = {};
-const applyTheme = kind => { const root = document.documentElement; root.className = 'coda-mac coda-' + kind;
-  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', '13px');
+const query = new URLSearchParams(location.search), isIOS = query.get('platform') === 'ios';
+const applyTheme = kind => { const root = document.documentElement; root.className = (isIOS ? 'coda-ios' : 'coda-mac') + ' coda-' + kind;
+  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', isIOS ? '17px' : '13px');
+  const safe = (query.get('safe') || '').split(',');
+  ['top', 'right', 'bottom', 'left'].forEach((side, i) => { if (safe[i]) root.style.setProperty('--safe-' + side, safe[i] + 'px'); });
   root.style.setProperty('--coda-mono', 'ui-monospace, Menlo, monospace'); (listeners.theme || []).forEach(f => f({ kind })); };
 const fire = (name, value) => (listeners[name] || []).forEach(f => f(value));
-const key = 'harness-state';
-window.coda = { platform: 'mac', plugin: 'resource-manager', view: 'files', args: null,
+const isFile = location.pathname.endsWith('/file.html');
+const key = 'harness-state:' + (isFile ? 'file:' : 'files') + (isFile ? query.get('session') + query.get('path') : '');
+const startArgs = isFile ? { session: query.get('session') ?? undefined, path: query.get('path') ?? undefined } : null;
+window.coda = { platform: query.get('platform') || 'mac', plugin: 'resource-manager', view: isFile ? 'file' : 'files', args: startArgs,
   postMessage: message => opened.then(() => fetch('/rpc?id=' + connection, { method: 'POST', body: JSON.stringify(message) })).then(() => undefined),
   getState: () => JSON.parse(sessionStorage.getItem(key) || 'null'),
   setState: value => { const text = JSON.stringify(value); if (text.length > 128 * 1024) throw new Error('状态超过 128 KiB'); sessionStorage.setItem(key, text); },
   copy: text => parent.postMessage({ harness: 'copy', text }, '*'),
   toolbar: items => parent.postMessage({ harness: 'toolbar', items }, '*'),
-  on: (name, fn) => { (listeners[name] ||= []).push(fn); }, close() {}, open() {} };
+  on: (name, fn) => { (listeners[name] ||= []).push(fn); },
+  close: () => { if (parent === window) history.back(); else parent.postMessage({ harness: 'close' }, '*'); },
+  open: target => { if (parent !== window) return parent.postMessage({ harness: 'open', target }, '*');
+    const next = new URLSearchParams(location.search); next.set('session', target.args.session); next.set('path', target.args.path); location.href = '/view/file.html?' + next; } };
 const connection = Math.random().toString(36).slice(2);
-const events = new EventSource('/events?id=' + connection), opened = new Promise(resolve => events.addEventListener('open', resolve));
+const events = new EventSource('/events?id=' + connection + '&view=' + (isFile ? 'file' : 'files') + '&args=' + encodeURIComponent(JSON.stringify(startArgs))), opened = new Promise(resolve => events.addEventListener('open', resolve));
 const loaded = new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve));
 applyTheme(new URLSearchParams(location.search).get('theme') || 'light');
 addEventListener('message', event => { if (event.data?.harness === 'toolbar') fire('toolbar', { id: event.data.id }); if (event.data?.harness === 'theme') applyTheme(event.data.kind); });
 addEventListener('pagehide', () => fire('visibility', false));
 events.addEventListener('msg', event => loaded.then(() => window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(event.data) }))));`;
 
-const control = `<!doctype html><meta charset=utf-8><title>harness</title>
-<body style="font:13px system-ui;display:flex;gap:16px;margin:12px"><iframe id=f src="/view/index.html" style="width:320px;height:789px;border:1px solid #888"></iframe>
+const control = src => `<!doctype html><meta charset=utf-8><title>harness</title>
+<body style="font:13px system-ui;display:flex;gap:16px;margin:12px"><iframe id=f src="${src}" style="width:320px;height:789px;border:1px solid #888"></iframe>
 <div><p id=bar></p><p>
 ${['theme:light', 'theme:dark', 'session:A', 'session:B', 'turn:end', 'reload'].map(a => `<button onclick="ctl('${a}')">${a}</button>`).join(' ')}</p><pre id=log></pre></div>
 <script>
+const params = new URLSearchParams(location.search);
+const base = params.get('view') === 'file' ? '/view/file.html' : '/view/index.html', fileSession = params.get('session');
 const f = document.getElementById('f'), log = text => document.getElementById('log').textContent = text + '\\n' + document.getElementById('log').textContent;
 let theme = 'light';
 async function ctl(a) { if (a.startsWith('theme:')) { theme = a.slice(6); f.contentWindow.postMessage({ harness: 'theme', kind: theme }, '*'); }
-  else if (a === 'reload') f.src = '/view/index.html?theme=' + theme + '&t=' + Date.now(); else await fetch('/ctl?action=' + a); }
+  else if (a === 'reload') f.src = base + '?' + new URLSearchParams({ ...Object.fromEntries(params), theme, t: Date.now() }); else await fetch('/ctl?action=' + a + (fileSession ? '&session=' + fileSession : '')); }
 addEventListener('message', e => { if (e.data?.harness === 'copy') log('copy: ' + e.data.text);
+  if (e.data?.harness === 'open') log('open: ' + JSON.stringify(e.data.target)); if (e.data?.harness === 'close') log('close');
   if (e.data?.harness === 'toolbar') document.getElementById('bar').replaceChildren(...e.data.items.map(i => Object.assign(document.createElement('button'), { textContent: i.label + (i.on ? ' ✓' : ''),
     onclick: () => f.contentWindow.postMessage({ harness: 'toolbar', id: i.id }, '*') }))); });
 </script>`;
@@ -79,11 +94,14 @@ const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.css': 'text/c
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const send = (status, body, type = 'text/plain') => { res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store' }); res.end(body); };
-  if (url.pathname === '/') return send(200, control, 'text/html');
+  if (url.pathname === '/') {
+    const file = url.searchParams.get('view') === 'file';
+    return send(200, control(`${file ? '/view/file.html' : '/view/index.html'}${url.search}`), 'text/html');
+  }
   if (url.pathname === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     res.write(': open\n\n'); // 让浏览器立刻收到响应头
-    const view = openView((event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    const view = openView((event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`), url.searchParams.get('view') ?? 'files', JSON.parse(url.searchParams.get('args') ?? 'null'));
     view.connection = url.searchParams.get('id');
     return req.on('close', () => { views.delete(view); view.handlers.close?.(); });
   }
@@ -97,7 +115,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/ctl') {
     const [kind, value] = url.searchParams.get('action').split(':');
     if (kind === 'session') { session = value; for (const view of views) view.handlers.context?.({ session, args: null }); }
-    if (kind === 'turn') { emit(session, 't'); setTimeout(() => emit(session, null), 50); }
+    if (kind === 'turn') { const id = url.searchParams.get('session') || session; emit(id, 't'); setTimeout(() => emit(id, null), 50); }
     return send(200, '');
   }
   if (url.pathname === '/shim.js') return send(200, shim, 'text/javascript');
@@ -106,7 +124,7 @@ const server = createServer(async (req, res) => {
     if (file.startsWith('..')) return send(403, '');
     try {
       let body = await readFile(join(viewDir, file), 'utf8');
-      if (file === 'index.html') body = body.replace('<head>', '<head><script src="/shim.js"></script>');
+      if (file === 'index.html' || file === 'file.html') body = body.replace('<head>', '<head><script src="/shim.js"></script>');
       return send(200, body, types[extname(file)] ?? 'text/plain');
     } catch { return send(404, ''); }
   }
