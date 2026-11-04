@@ -1,7 +1,6 @@
-// 页面的纯状态：请求与代次、目录树、状态保留。不碰 DOM，设计见 docs/design/phase-1.md 第 6、7 节。
+// 页面的纯状态：目录树、状态保留。不碰 DOM，请求与代次在 connection.mjs，设计见 docs/design/phase-1.md 第 6、7 节。
 import { ErrorCode, RootState, Type } from './protocol.mjs';
 
-export const TIMEOUT_MS = 30_000;
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
 const HIDDEN = new Set(['.git', '.DS_Store']);
@@ -9,61 +8,22 @@ export const isHidden = name => HIDDEN.has(name);
 export const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
 const inside = (path, dir) => path === dir || path.startsWith(`${dir}/`);
 
-// 会话已经换了，请求作废。调用方一律吞掉，不显示。
-export class Stale extends Error { constructor() { super('已过期'); this.stale = true; } }
-export class RequestError extends Error { constructor(code, message) { super(message); this.code = code; } }
-
-// 请求与回答按 requestId 对应。回答要代次相同、请求号还在等待才算；换会话时 reset 作废所有等待并停掉超时。
-export class Link {
-  generation = null;
-  pending = new Map();
-  #next = 1;
-
-  constructor({ post, timers = globalThis, timeoutMs = TIMEOUT_MS }) {
-    Object.assign(this, { post, timers, timeoutMs });
-  }
-
-  reset(generation) {
-    this.generation = generation;
-    for (const entry of this.pending.values()) { this.timers.clearTimeout(entry.timer); entry.reject(new Stale()); }
-    this.pending.clear();
-  }
-
-  call(type, fields) {
-    if (this.generation === null) return Promise.reject(new Stale());
-    const { generation } = this, requestId = `q${this.#next++}`;
-    return new Promise((resolve, reject) => {
-      const settle = error => {
-        const entry = this.pending.get(requestId);
-        if (!entry) return;
-        this.pending.delete(requestId);
-        this.timers.clearTimeout(entry.timer);
-        reject(error);
-      };
-      const timer = this.timers.setTimeout(() => settle(new RequestError('timeout', '30 秒没有回答')), this.timeoutMs);
-      this.pending.set(requestId, { resolve, reject, timer });
-      Promise.resolve().then(() => this.post({ type, generation, requestId, ...fields }))
-        .catch(() => settle(new RequestError(ErrorCode.IO, '消息发不出去')));
-    });
-  }
-
-  receive(message) {
-    if (message.generation !== this.generation) return false;
-    const entry = this.pending.get(message.requestId);
-    if (!entry) return false;
-    this.pending.delete(message.requestId);
-    this.timers.clearTimeout(entry.timer);
-    if (message.error) entry.reject(new RequestError(message.error.code, message.error.message));
-    else entry.resolve(message);
-    return true;
-  }
-}
-
 async function pool(items, limit, fn) {
   let index = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (index < items.length) await fn(items[index++]);
   }));
+}
+
+// 根目录不可用时，树页和文件页显示的说明。root 为 null 表示还没收到。
+export function noticeText(root, session) {
+  if (!root) return '正在读取…';
+  if (!session) return '没有打开的会话。';
+  return {
+    [RootState.NONE]: '这个会话没有可浏览的工作目录。',
+    [RootState.PREPARING]: '工作树还在准备，好了会自动显示。',
+    [RootState.GONE]: '工作目录已不存在，可能已随归档收回。再发消息会重建，之后自动恢复。',
+  }[root.state] ?? '';
 }
 
 export class Model {

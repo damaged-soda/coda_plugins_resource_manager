@@ -56,15 +56,16 @@ export function fakeCoda(threads = {}) {
     // 集合事件：turn 是进行中那一轮的 ID 或 null。
     emit: (id, turn, type = 'MODIFIED') => { for (const fn of watchers) fn({ type, id, object: { id, turn } }); },
     queried: id => api.filter(path => path === `threads/${id}`).length,
-    open(session) { return openView(this, session); },
+    // options.view 是视图 ID（files 或 file），options.args 是打开它带的参数。
+    open(session, options) { return openView(this, session, options); },
   };
   return fake;
 }
 
-function openView(fake, session) {
+function openView(fake, session, { view: viewId = 'files', args = null } = {}) {
   const handlers = {}, posted = [], dropped = [], listeners = [];
   const view = {
-    id: 'instance', view: 'files', context: { session, args: null },
+    id: 'instance', view: viewId, context: { session, args },
     postMessage(message) {
       // 同宿主：序列化后超过 128 KiB 的被丢弃。
       if (messageSize(message) > MESSAGE_LIMIT) return dropped.push(message);
@@ -75,12 +76,12 @@ function openView(fake, session) {
     onContext: fn => { handlers.context = fn; },
     onClose: fn => { handlers.close = fn; },
   };
-  fake.views.get('files').open(view);
+  fake.views.get(viewId).open(view);
   const of = type => posted.filter(message => message.type === type);
   return {
     posted, dropped, of, listen: fn => listeners.push(fn),
     send: message => handlers.message(message),
-    switchTo: next => handlers.context({ session: next, args: null }),
+    switchTo: (next, nextArgs = null) => handlers.context({ session: next, args: nextArgs }),
     close: () => handlers.close(),
     // 取第一条带这个请求号的回答。
     answer: async requestId => {

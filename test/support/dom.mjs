@@ -92,13 +92,12 @@ export function visible(node) {
   return true;
 }
 
-// 装上 window、document 等全局并加载真实的 view/app.mjs，每次得到全新的模块实例。
+// 装上 window、document 等全局并加载真实的页面入口（默认 view/app.mjs），每次得到全新的模块实例。
 let instance = 0;
-export async function loadApp(t, coda) {
-  const ids = ['bar', 'tree', 'preview', 'notice', 'menu'];
+export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu'] } = {}) {
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   elements.bar.hidden = true;
-  elements.menu.hidden = true;
+  if (elements.menu) elements.menu.hidden = true;
   const windowEmitter = new Emitter(), documentEmitter = new Emitter();
   const dom = {
     window: Object.assign(windowEmitter, { coda }),
@@ -112,10 +111,12 @@ export async function loadApp(t, coda) {
   t.after(() => {
     for (const [key, descriptor] of Object.entries(saved)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   });
-  await import(`../../view/app.mjs?instance=${++instance}`);
+  await import(`../../view/${entry}?instance=${++instance}`);
   return {
     ...elements,
     // 模块发给页面的消息。
     post: data => windowEmitter.emit({ type: 'message', data }),
   };
 }
+
+export const loadFileApp = (t, coda) => loadApp(t, coda, { entry: 'file-app.mjs', ids: ['bar', 'preview', 'notice'] });

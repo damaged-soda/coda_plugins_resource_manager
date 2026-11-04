@@ -1,5 +1,6 @@
 // 页面状态层的测试支架：手动回答的传输，和接真实模块的传输。
-import { Link, Model } from '../../view/model.mjs';
+import { Link } from '../../view/connection.mjs';
+import { Model } from '../../view/model.mjs';
 import { flush } from './fake.mjs';
 
 export function fakeTimers() {

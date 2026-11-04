@@ -3,7 +3,7 @@
   "name": "resource-manager",
   "displayName": "资源管理器",
   "description": "会话旁的只读文件浏览器：浏览会话工作目录，预览文本和图片，把路径交给对话。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "categories": ["工作流程"],
   "license": "MIT",
   "repository": {
@@ -13,7 +13,8 @@
   "main": "main.mjs",
   "contributes": {
     "views": [
-      { "id": "files", "title": "资源管理器", "entry": "view/index.html", "in": ["side"], "icon": "folder" }
+      { "id": "files", "title": "资源管理器", "entry": "view/index.html", "in": ["side"], "icon": "folder" },
+      { "id": "file", "title": "文件", "entry": "view/file.html" }
     ]
   }
 }
