@@ -231,3 +231,13 @@ test('parseState：校验顶层 sort，形状不对回默认值；保存和裁�
   assert.deepEqual(trimState(state, 'A', 10).sort ?? { key: 'date', desc: true }, { key: 'date', desc: true });
   assert.deepEqual(trimState(state, 'A').sort, { key: 'date', desc: true });
 });
+
+test('parseState：每个会话的滚动位置带当时的排序，形状不对或缺失（旧版本）是默认排序', () => {
+  const scroll = sort => ({ tree: 5, top: 0, left: 0, ...(sort === undefined ? {} : { sort }) });
+  const { sessions } = parseState({ v: 1, sessions: {
+    A: { expanded: [], scroll: scroll({ key: 'date', desc: true }) }, B: { expanded: [], scroll: scroll() },
+    C: { expanded: [], scroll: scroll({ key: 'color', desc: true }) }, D: { expanded: [], scroll: scroll('size') },
+  } });
+  assert.deepEqual(sessions.A.scroll.sort, { key: 'date', desc: true });
+  for (const id of ['B', 'C', 'D']) assert.deepEqual(sessions[id].scroll.sort, { key: 'name', desc: false }, id);
+});

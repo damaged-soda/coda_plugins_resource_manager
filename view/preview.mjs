@@ -1,4 +1,5 @@
 // 文件预览：只接收路径和读块的能力，不依赖树的状态。readFile 是纯逻辑；mountPreview 才碰 DOM。
+import { formatSize } from './format.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { ContentKind, EntryKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
 
@@ -44,13 +45,6 @@ export async function readFile(read, { prev = null, onProgress = () => {}, cance
   throw Object.assign(error, { code: ErrorCode.IO });
 }
 
-export function formatSize(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KiB', 'MiB', 'GiB'];
-  let value = bytes / 1024, unit = 0;
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
-}
 const formatTime = ms => new Date(ms).toLocaleString('zh-CN', { hour12: false });
 export const lineCount = text => (text === '' ? 1 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
 

@@ -376,7 +376,7 @@ test('parseState：坏的、别的版本的值回到空状态，只认自己的�
   for (const raw of [undefined, null, 5, 'x', { v: 2 }, { v: 1, sessions: 3 }]) assert.deepEqual(parseState(raw).sessions, {});
   const parsed = parseState({ v: 1, hidden: true, seq: 3, sessions: { A: { at: 2, expanded: ['a', 7, 'b'], selected: 9, scroll: { tree: -1, top: 4 } }, B: null } });
   assert.equal(parsed.hidden, true);
-  assert.deepEqual(parsed.sessions, { A: { at: 2, expanded: ['a', 'b'], selected: null, scroll: { tree: 0, top: 4, left: 0 } } });
+  assert.deepEqual(parsed.sessions, { A: { at: 2, expanded: ['a', 'b'], selected: null, scroll: { tree: 0, top: 4, left: 0, sort: { key: 'name', desc: false } } } });
 });
 
 // ---- 返回后恢复：已加载的条数 ----

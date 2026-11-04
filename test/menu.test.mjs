@@ -20,7 +20,7 @@ const parts = page => ({
 const items = page => page.menu.find(node => node.tagName === 'BUTTON');
 const item = (page, label) => items(page).find(node => node.textContent === label);
 const pointerClick = node => { node.dispatch('pointerdown', { pointerId: 1, isPrimary: true }); node.dispatch('pointerup'); node.dispatch('click'); };
-const names = page => rowsOf(page).filter(node => node.classList.contains('entry')).map(node => node.textContent);
+const names = page => rowsOf(page).filter(node => node.classList.contains('entry')).map(node => node.find(part => part.classList.contains('name'))[0].textContent);
 
 test('iPhone 工具条：返回（仅横屏）、根目录名、⋯；⋯ 是图标按钮，有可访问名称和菜单属性', async t => {
   const { page } = await start(t);
@@ -30,7 +30,7 @@ test('iPhone 工具条：返回（仅横屏）、根目录名、⋯；⋯ 是图
   assert.equal(more.textContent, '');
   assert.equal(more.getAttribute('aria-haspopup'), 'menu');
   assert.equal(more.getAttribute('aria-expanded'), 'false');
-  assert.deepEqual(page.bar.children.map(node => node.tagName), ['BUTTON', 'SPAN', 'BUTTON'], '没有「刷新」「显示隐藏文件」的按钮，它们在菜单里');
+  assert.deepEqual(page.bar.children.map(node => node.tagName), ['BUTTON', 'SPAN', 'BUTTON', 'BUTTON'], '返回、根目录名、排序、⋯；没有「刷新」「显示隐藏文件」的按钮，它们在菜单里');
 });
 
 test('根目录名随会话变，工具条跟着重画；没变就不重画', async t => {

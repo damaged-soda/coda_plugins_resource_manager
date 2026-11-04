@@ -19,6 +19,7 @@ const SHAPES = {
   refresh: { shapes: [['path', { d: 'M19 12a7 7 0 1 1-2.05-4.95' }], ['path', { d: 'M19 4.5v3.8h-3.8' }]] },
   copy: { shapes: [['rect', { x: 8.5, y: 8.5, width: 11, height: 11, rx: 2.2 }], ['path', { d: 'M15.5 8.5V6.7a2.2 2.2 0 0 0-2.2-2.2H6.7a2.2 2.2 0 0 0-2.2 2.2v6.6a2.2 2.2 0 0 0 2.2 2.2h1.8' }]] },
   window: { shapes: [['rect', { x: 3.5, y: 5, width: 17, height: 14, rx: 2.5 }], ['path', { d: 'M3.5 9.5h17' }]] },
+  sort: { shapes: [['path', { d: 'M8 19V5M4.5 8.5 8 5l3.5 3.5' }], ['path', { d: 'M16 5v14M12.5 15.5 16 19l3.5-3.5' }]] },
   turn: { shapes: [['path', { d: 'M5 18v-4a4 4 0 0 1 4-4h10' }], ['path', { d: 'm15 6 4 4-4 4' }]] },
 };
 

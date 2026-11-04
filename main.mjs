@@ -17,20 +17,21 @@ const sessionOfFile = context => {
   return typeof session === 'string' && session !== '' ? session : null;
 };
 
-export function activate(coda) {
-  coda.views.register('files', { open: view => serve(coda, view, sessionOfTree) });
-  coda.views.register('file', { open: view => serve(coda, view, sessionOfFile) });
+// options.makeListing 只给测试用：换成带假文件系统的读取状态，运行时不传。
+export function activate(coda, { makeListing = createListing } = {}) {
+  coda.views.register('files', { open: view => serve(coda, view, sessionOfTree, makeListing) });
+  coda.views.register('file', { open: view => serve(coda, view, sessionOfFile, makeListing) });
 }
 
 const validRequestId = id => (typeof id === 'string' && id.length <= REQUEST_ID_MAX) || Number.isSafeInteger(id);
 const errorOf = error => (error?.protocol ? { code: error.code, message: error.message } : { code: ErrorCode.IO, message: '读取失败' });
 
-function serve(coda, view, sessionOf) {
+function serve(coda, view, sessionOf, makeListing) {
   // 代次：每换一次会话加 1，所有异步出口回来后都要核对。
   const s = {
     session: sessionOf(view.context), generation: 1, root: NO_ROOT, sent: null,
     hello: false, closed: false, rootSeq: 0, poll: null,
-    listing: createListing(), // 这个视图共用的并发上限和快照；视图关闭、换会话、根目录变化时丢弃
+    listing: makeListing(), // 这个视图共用的并发上限和快照；视图关闭、换会话、根目录变化时丢弃
   };
   const turns = new Map();
   const stale = generation => s.closed || generation !== s.generation;

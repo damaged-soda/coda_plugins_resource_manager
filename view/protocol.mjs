@@ -28,6 +28,7 @@ export const ErrorCode = Object.freeze({
 // 目录排序：key 是下面四种之一，desc 为 true 是降序。缺省（请求不带 sort）是名称升序。
 export const SortKey = Object.freeze({ NAME: 'name', KIND: 'kind', DATE: 'date', SIZE: 'size' });
 export const DEFAULT_SORT = Object.freeze({ key: SortKey.NAME, desc: false });
+export const sameSort = (a, b) => a.key === b.key && a.desc === b.desc;
 // 形状对的返回规范化的 { key, desc }，否则 null。
 export function parseSort(raw) {
   if (!raw || typeof raw !== 'object' || !Object.values(SortKey).includes(raw.key) || typeof raw.desc !== 'boolean') return null;

@@ -1,5 +1,6 @@
 // 目录树：visibleRows 把模型压成扁平行（纯逻辑）；mountTree 只画可见的那一段，上万条也不卡。
-import { EntryKind } from './protocol.mjs';
+import { EntryKind, SortKey } from './protocol.mjs';
+import { dateText, infoText, sizeText, sortAria, sortName } from './format.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
@@ -8,7 +9,7 @@ const OVERSCAN = 8;
 export const HOLD_MS = 500;
 export const HOLD_SLOP = 10;
 
-// 行：{ type: 'entry' | 'status' | 'more', path, name, depth, kind, link, open, busy, failed, text }
+// 行：{ type: 'entry' | 'status' | 'more', path, name, depth, kind, link, size, mtimeMs, open, busy, failed, text }；size、mtimeMs 读不到时没有
 export function visibleRows(model) {
   const rows = [];
   const walk = (dir, depth) => {
@@ -24,7 +25,7 @@ export function visibleRows(model) {
       if (!model.showHidden && isHidden(entry.name)) continue;
       const path = joinPath(dir, entry.name), open = entry.kind === EntryKind.DIR && model.expanded.has(path);
       rows.push({
-        type: 'entry', path, name: entry.name, depth, kind: entry.kind, link: entry.link === true, open,
+        type: 'entry', path, name: entry.name, depth, kind: entry.kind, link: entry.link === true, size: entry.size, mtimeMs: entry.mtimeMs, open,
         busy: open && model.dirs.get(path)?.loading === true, failed: open ? model.dirs.get(path)?.error?.message : undefined,
       });
       if (open) walk(path, depth + 1);
@@ -41,13 +42,23 @@ export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
 
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
-// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, path, kind) }
-// draggable：触屏上拖行没有用处，还会抢滚动，关掉。
+// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row), sort(button) }
+// menu 收到整行（路径、种类、大小、修改时间）；sort 收到 Mac 标题行上的排序按钮，菜单贴着它。
+// draggable：触屏上拖行没有用处，还会抢滚动，关掉。now：当前时间，日期的相对格式用，测试可注入。
 // longPress：触屏上按住一行打开 handlers.menu（Mac 用右键）。不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
-export function mountTree(el, model, handlers, { draggable = true, longPress = false } = {}) {
+export function mountTree(el, model, handlers, { draggable = true, longPress = false, now = Date.now } = {}) {
   const title = document.createElement('div'), spacer = document.createElement('div'), win = document.createElement('div');
-  title.className = 'section truncate'; spacer.className = 'spacer'; win.className = 'win';
+  title.className = 'section'; spacer.className = 'spacer'; win.className = 'win';
   title.hidden = true;
+  // 标题行：根目录名、排序按钮（Mac）。按钮是同一个节点，只换文字和可访问名称：菜单记着是谁打开的，重建会让它认不出。
+  const titleName = document.createElement('span'), sortButton = document.createElement('button'), sortText = document.createElement('span');
+  titleName.className = 'section-name grow truncate';
+  sortButton.className = 'sort';
+  sortButton.setAttribute('aria-haspopup', 'menu');
+  sortButton.setAttribute('aria-expanded', 'false');
+  sortButton.append(icon('sort', 14), sortText);
+  sortButton.addEventListener('click', () => handlers.sort(sortButton));
+  title.append(titleName, sortButton);
   spacer.append(win);
   el.replaceChildren(title, spacer);
   let rows = [], rowH = 24;
@@ -65,8 +76,14 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
   // 分区标题：根目录的名字（root.path 的最后一段），不是 ready 时不显示。iPhone 上由 CSS 隐藏。
   const paintTitle = () => {
     const text = model.ready ? rootName(model.root.path) : '';
-    if (title.textContent !== text) title.textContent = text;
+    if (titleName.textContent !== text) titleName.textContent = text;
     title.hidden = text === '';
+    const aria = sortAria(model.sort);
+    if (sortButton.getAttribute('aria-label') !== aria) {
+      sortButton.setAttribute('aria-label', aria);
+      sortButton.title = aria;
+      sortText.textContent = sortName(model.sort.key);
+    }
   };
 
   // 标题在滚动容器里，把 spacer 推下去 offsetTop：行的位置按 spacer 内部算，滚动值（保存和恢复的）仍是容器的。
@@ -75,10 +92,11 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     const first = Math.max(0, Math.floor(top / rowH) - OVERSCAN);
     const last = Math.min(rows.length, Math.ceil((top + el.clientHeight) / rowH) + OVERSCAN);
     win.style.transform = `translateY(${first * rowH}px)`;
-    win.replaceChildren(...rows.slice(first, last).map((row, i) => rowNode(row, first + i)));
+    const time = now();
+    win.replaceChildren(...rows.slice(first, last).map((row, i) => rowNode(row, first + i, time)));
   }
 
-  function rowNode(row, index) {
+  function rowNode(row, index, time) {
     const node = document.createElement('div');
     node.className = `row ${row.type}`;
     node.dataset.i = index;
@@ -94,21 +112,34 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     if (row.path === model.selected) node.classList.add('sel');
     if (row.kind === EntryKind.DIR) node.setAttribute('aria-expanded', row.open);
     if (!dead && draggable) node.draggable = true;
-    // 一份 DOM：Mac 是 箭头、图标、名字、尾标，iPhone 的箭头用 CSS order 排到最后。
-    const chevron = document.createElement('span'), glyph = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
+    // 一份 DOM：箭头、图标、名字（iPhone 下面跟日期 · 大小）、Mac 的 meta、尾标；iPhone 的箭头用 CSS order 排到最后，两端各用 CSS 藏起另一端的那段。
+    const chevron = document.createElement('span'), glyph = document.createElement('span'), main = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
     chevron.className = 'chev';
     if (row.busy) chevron.textContent = '…';
     else if (!dead) chevron.append(icon('chevron', 12)); // 文件的箭头 Mac 上由 CSS 藏起来，只占位
     if (row.open) node.classList.add('open');
     glyph.className = 'ico';
     glyph.append(icon(iconFor(row)));
+    main.className = 'main';
     label.className = 'name truncate';
     label.textContent = row.name;
+    main.append(label);
+    const parts = [chevron, glyph, main];
+    if (!dead) {
+      // 能打开的条目带信息；link、other 没有，iPhone 上名字垂直居中。
+      const sub = document.createElement('span'), meta = document.createElement('span');
+      sub.className = 'sub caption secondary truncate';
+      sub.textContent = `${dateText(row, time)} · ${sizeText(row)}`;
+      meta.className = 'meta caption secondary';
+      meta.textContent = model.sort.key === SortKey.DATE ? dateText(row, time) : sizeText(row);
+      main.append(sub);
+      parts.push(meta);
+    }
     tail.className = row.failed ? 'tail warn' : 'tail';
     if (row.failed) tail.append(icon('warning', 14));
     else if (row.link) tail.append(icon('turn', 14));
-    node.title = row.failed ? `${row.path}\n读取失败：${row.failed}` : TITLES[row.kind] ? `${row.path}\n${TITLES[row.kind]}` : row.path;
-    node.append(chevron, glyph, label, tail);
+    node.title = row.failed ? `${row.path}\n读取失败：${row.failed}` : TITLES[row.kind] ? `${row.path}\n${TITLES[row.kind]}` : `${row.path}\n${infoText(row)}`;
+    node.append(...parts, tail);
     return node;
   }
 
@@ -128,7 +159,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
       hold = { id, x, y, timer: setTimeout(() => {
         hold = null;
         swallow = true;
-        handlers.menu({ clientX: x, clientY: y }, row.path);
+        handlers.menu({ clientX: x, clientY: y }, row);
       }, HOLD_MS) };
     });
     el.addEventListener('pointermove', event => {
@@ -149,7 +180,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
   });
   el.addEventListener('contextmenu', event => {
     const row = rowOf(event);
-    if (row?.type === 'entry') { event.preventDefault(); handlers.menu(event, row.path); }
+    if (row?.type === 'entry') { event.preventDefault(); handlers.menu(event, row); }
   });
   el.addEventListener('dragstart', event => {
     const row = rowOf(event);

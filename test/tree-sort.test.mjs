@@ -339,6 +339,30 @@ test('同身份的第一页并发共用一次读取；detach 之后不再共用'
   assert.equal(spy.counts.readdir, 5);
 });
 
+test('同身份的旧读取晚到：只有最新发起的读取存快照，新第一页的游标仍有效；旧读取的回答照常返回，它的游标过期', async t => {
+  const root = await tempDir(t);
+  for (let i = 0; i < 4; i++) await file(root, `f${i}`, i);
+  const gate = deferred();
+  let calls = 0;
+  const spy = countingFs({ hooks: { readdir: async (...args) => { const original = args.pop(); if (calls++ === 0) await gate.promise; return original(...args); } } });
+  const listing = createListing({ fs: spy.fs });
+  const ask = cursor => listDirectory(root, '', cursor, { listing, sort: sorted('size', false), pageBytes: TINY });
+  const old = ask(null);
+  await waitFor(() => spy.counts.readdir === 1, '旧读取卡在 readdir');
+  listing.detach(); // refresh、changed：不再共用，新请求重新读
+  const fresh = await ask(null);
+  assert.equal(spy.counts.readdir, 2);
+  assert.equal(listing.snapshots.size, 1);
+  gate.resolve();
+  const late = await old;
+  assert.equal(listing.snapshots.size, 1, '旧读取没有顶掉新快照');
+  assert.deepEqual(names(late), names(fresh), '旧读取的回答照常返回');
+  const second = await ask(fresh.nextCursor);
+  assert.deepEqual(names(second), ['f1']);
+  await assert.rejects(ask(late.nextCursor), code('cursor_expired'));
+  assert.equal(listing.latest.size, 0, '读完不留记录');
+});
+
 test('根目录：读的途中根目录换了，不存快照，也不回答内容；游标换到别的根目录用不了', async t => {
   const root = await tempDir(t);
   for (let i = 0; i < 4; i++) await file(root, `f${i}`, i);

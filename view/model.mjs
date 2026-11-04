@@ -1,5 +1,5 @@
 // 页面的纯状态：目录树、状态保留。不碰 DOM，请求与代次在 connection.mjs，设计见 docs/design/phase-1.md 第 6、7 节。
-import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort } from './protocol.mjs';
+import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort, sameSort } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
@@ -93,7 +93,7 @@ export class Model {
   // 换排序：已加载的目录按新顺序重新取，取够现在的条数，这次最多 RESTORE_LIMIT 条；每个目录一次替换。
   setSort(sort) {
     const next = parseSort(sort);
-    if (!next || (next.key === this.sort.key && next.desc === this.sort.desc)) return Promise.resolve();
+    if (!next || sameSort(next, this.sort)) return Promise.resolve();
     this.sort = next;
     this.onChange();
     return this.refresh({ cap: RESTORE_LIMIT });
@@ -216,7 +216,8 @@ export function parseState(raw) {
     state.sessions[id] = {
       at: Number.isSafeInteger(item.at) ? item.at : 0, expanded: strings(item.expanded, 5000),
       selected: typeof item.selected === 'string' && item.selected.length <= 1024 ? item.selected : null,
-      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left) },
+      // 滚动位置是按当时的排序存的；旧版本没有这个字段，那时一定是默认排序。
+      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? { ...DEFAULT_SORT } },
     };
     const loaded = parseLoaded(item.loaded);
     if (Object.keys(loaded).length > 0) state.sessions[id].loaded = loaded;

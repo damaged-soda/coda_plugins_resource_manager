@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
 import { flush } from './support/fake.mjs';
-import { openTree, rowNamed, sectionOf } from './support/treehost.mjs';
+import { openTree, rowNamed, sectionNameOf, sectionOf } from './support/treehost.mjs';
 import { iconFor, icon } from '../view/icons.mjs';
 
 const svgOf = node => node.find(child => child.tagName === 'SVG')[0];
@@ -85,11 +85,11 @@ test('文件行：图标按扩展名，没有 aria-expanded，箭头槽还在（
   assert.equal(part(rowNamed(page, 'a.txt'), 'tail').children.length, 0);
 });
 
-test('链接尾标：指向内部的链接有箭头图标，title 不变；失效和其他是 dead，没有箭头也没有尾标', async t => {
+test('链接尾标：指向内部的链接有箭头图标；失效和其他是 dead，没有箭头也没有尾标', async t => {
   const { page } = await start(t);
   const link = rowNamed(page, 'to-file');
   assert.equal(part(link, 'tail').find(n => n.tagName === 'SVG').length, 1);
-  assert.equal(link.title, 'to-file');
+  assert.equal(link.title, 'to-file\n— · —', '路径，加上读不到时的 —');
   assert.equal(link.classList.contains('dead'), false);
   for (const [name, text] of [['gone', '指向工作目录外的链接，不能打开'], ['dev', '不能打开的文件']]) {
     const row = rowNamed(page, name);
@@ -101,12 +101,12 @@ test('链接尾标：指向内部的链接有箭头图标，title 不变；失�
   }
 });
 
-test('行的 DOM 只有一份：箭头、图标、名字、尾标，缩进走 --d', async t => {
+test('行的 DOM 只有一份：箭头、图标、名字（带第二行）、meta、尾标，缩进走 --d', async t => {
   const { page } = await start(t);
   rowNamed(page, 'src').dispatch('click');
   await flush();
   const row = rowNamed(page, 'x.js');
-  assert.deepEqual(row.children.map(node => node.className), ['chev', 'ico', 'name truncate', 'tail']);
+  assert.deepEqual(row.children.map(node => node.className), ['chev', 'ico', 'main', 'meta caption secondary', 'tail']);
   assert.equal(row.style.cssText, '--d: 1');
   assert.equal(rowNamed(page, 'a.txt').style.cssText, '--d: 0');
 });
@@ -116,15 +116,15 @@ test('分区标题：根目录的最后一段，随会话变；根目录不是 r
   assert.equal(visible(sectionOf(page)), false, '还没有根目录');
   host.session('s1', '/Users/x/code/alpha');
   await flush();
-  assert.equal(sectionOf(page).textContent, 'alpha');
+  assert.equal(sectionNameOf(page).textContent, 'alpha');
   assert.ok(visible(sectionOf(page)));
   assert.equal(page.tree.children[0], sectionOf(page), '标题在滚动容器里、卡片和列表之前');
   host.session('s2', '/tmp/beta/');
   await flush();
-  assert.equal(sectionOf(page).textContent, 'beta');
+  assert.equal(sectionNameOf(page).textContent, 'beta');
   host.session('s3', '/');
   await flush();
-  assert.equal(sectionOf(page).textContent, '/', '根就是 /');
+  assert.equal(sectionNameOf(page).textContent, '/', '根就是 /');
 });
 
 test('标题高度不影响可见行：spacer 前面的偏移从滚动值里扣掉', async t => {

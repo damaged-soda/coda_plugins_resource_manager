@@ -2,7 +2,7 @@
 // 自己起 harness 服务和临时目录（用完删掉），截图放在系统临时目录里，不进仓库。
 // 用法：node test/harness/layout.mjs [Chrome 的路径]；失败时退出码非 0。
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,8 @@ const chromePath = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/
 const DEBUG_PORT = 9334, STARTUP_MS = 60000;
 const FILLER = 120; // 根目录里排在最后的一批文件，撑出第二页以后的内容
 const LONG_LINES = 300; // notes.txt 的行数：文件页要滚得动，才能看最后一行是否被底部工具条挡住
-const ROOT_ROWS = 4 + 3 + 2 + FILLER; // 四个目录、三个文件、两个链接、填充
+const LONG_NAME = 'a-very-long-file-name-that-cannot-fit-in-a-narrow-sidebar.md'; // 名字截断时 meta 不缩
+const ROOT_ROWS = 4 + 3 + 1 + 2 + FILLER; // 四个目录、三个文件、一个长名字、两个链接、填充
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // 先建临时目录，之后所有资源都在 try/finally 里创建，失败时一并清理。
@@ -62,8 +63,11 @@ async function start() {
   await Promise.all([
     touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'),
     touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
-    ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
+    touch(LONG_NAME), ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
   ]);
+  // 修改日期有今年和往年的，今天的是刚建的：三种相对格式都能看到。
+  await utimes(join(fixture, 'LICENSE'), new Date(2025, 2, 4), new Date(2025, 2, 4, 10, 0));
+  await utimes(join(fixture, 'package.json'), new Date(2026, 0, 15), new Date(2026, 0, 15, 9, 30));
   await symlink('notes.txt', join(fixture, 'latest-notes'));
   await symlink('/nonexistent-target', join(fixture, 'dangling'));
   await chmod(join(fixture, 'locked'), 0);
@@ -87,7 +91,7 @@ async function start() {
   ws.addEventListener('close', () => { for (const { reject } of waiting.values()) reject(new Error('CDP 连接断开')); waiting.clear(); });
 }
 
-const SIZES = { mac: [280, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'] };
+const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 async function open(size, platform, theme, { keep = false, state = null } = {}) {
   const [w, h, safe] = SIZES[size];
@@ -105,6 +109,11 @@ async function openFile(size, theme, query = 'session=A&path=notes.txt') {
   await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${Date.now()}` });
   await until(`document.querySelector('.text') || document.querySelector('#notice:not(.off) p')`, '文件页出现');
 }
+// 用排序控件选一项（点控件、点菜单项），等目录树按新顺序重画。
+const pick = async (label, control = '.sort') => {
+  await evaluate(`document.querySelector('${control}').click(); [...document.querySelectorAll('#menu button')].find(x => x.textContent.startsWith('${label}')).click()`);
+  await wait(500);
+};
 const shoot = async name => { await wait(300); await writeFile(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')); };
 
 const failures = [];
@@ -112,7 +121,8 @@ const check = (name, ok, detail = '') => { console.log(`${ok ? '✓' : '✗'} ${
 
 // 视口里每隔一段取一个点：每一点都该落在某一行上（空白说明虚拟滚动画少了）。
 const covered = `(() => { const pane = document.getElementById('tree'), r = pane.getBoundingClientRect(), miss = [];
-  for (let y = r.top + 4; y < r.bottom - 4; y += 8) { const e = document.elementFromPoint(r.left + r.width / 2, y); if (!e?.closest('.row')) miss.push(Math.round(y)); }
+  const head = document.querySelector('.section'), from = head && head.getClientRects().length ? head.getBoundingClientRect().bottom : r.top; // 吸顶的标题行不算
+  for (let y = from + 4; y < r.bottom - 4; y += 8) { const e = document.elementFromPoint(r.left + r.width / 2, y); if (!e?.closest('.row')) miss.push(Math.round(y)); }
   return miss; })()`;
 
 let exitCode = 1;
@@ -121,7 +131,7 @@ try {
   // ---- 断言 ----
   // 有标题（Mac）时：滚到第二页深处，状态存下来，重新载入后恢复到同一个位置，视口里没有空白。
   await open('mac', 'mac', 'light');
-  check('Mac：有分区标题', await evaluate(`document.querySelector('.section')?.textContent === 'demo-project' && document.querySelector('.section').getClientRects().length > 0`));
+  check('Mac：有分区标题', await evaluate(`document.querySelector('.section-name')?.textContent === 'demo-project' && document.querySelector('.section').getClientRects().length > 0`));
   const target = await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = p.clientHeight * 1.5 + 13; p.dispatchEvent(new Event('scroll')); return p.scrollTop; })()`);
   await wait(700); // 保存的定时器 300 毫秒
   await open('mac', 'mac', 'light', { keep: true });
@@ -138,6 +148,19 @@ try {
   check('Mac：spacer 的 offsetTop 就是标题高度', geometry.offset === geometry.title && geometry.title > 0, JSON.stringify(geometry));
   check('Mac：有标题时画出的第一行按扣掉标题的滚动值算，位置对得上', geometry.first === geometry.expected && geometry.placed, JSON.stringify(geometry));
 
+
+  // 标题行吸顶：滚到第二页深处后它还贴着容器顶，真实行没被它遮挡（标题底下紧挨着的那一行，序号对得上），标题本身点得到。
+  const stuck = await evaluate(`(() => { const p = document.getElementById('tree'), sp = document.querySelector('.spacer'), sec = document.querySelector('.section'),
+    rowH = parseFloat(sp.style.height) / ${ROOT_ROWS}, pr = p.getBoundingClientRect(), sr = sec.getBoundingClientRect();
+    const hit = document.elementFromPoint(pr.left + pr.width / 2, sr.bottom + 2)?.closest('.row'), above = document.elementFromPoint(sr.left + 8, sr.top + sr.height / 2);
+    return { scroll: p.scrollTop, stuck: Math.abs(sr.top - pr.top) < 0.5, hit: hit ? Number(hit.dataset.i) : null,
+      expected: Math.floor((p.scrollTop - sp.offsetTop + sec.offsetHeight + 2) / rowH), titleHit: above?.closest('.section') === sec, bg: getComputedStyle(sec).backgroundColor }; })()`);
+  check('Mac：吸顶时标题行贴着容器顶，标题底下紧挨着的真实行序号对得上，没被遮挡', stuck.scroll > 0 && stuck.stuck && stuck.hit === stuck.expected && stuck.titleHit && stuck.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(stuck));
+  // 滚到最底：最后一行完整可见，没有被吸顶的标题挡住的空白。
+  const bottom = await evaluate(`(async () => { const p = document.getElementById('tree'); p.scrollTop = p.scrollHeight; p.dispatchEvent(new Event('scroll')); await new Promise(r => setTimeout(r, 200));
+    const last = [...document.querySelectorAll('.row')].at(-1).getBoundingClientRect(), pr = p.getBoundingClientRect(); return { lastBottom: last.bottom, paneBottom: pr.bottom, text: [...document.querySelectorAll('.row')].at(-1).textContent }; })()`);
+  check('Mac：滚到底，最后一行完整在容器里', bottom.text.includes('zz-119') && bottom.lastBottom <= bottom.paneBottom + 0.5, JSON.stringify(bottom));
+
   // 主题或字号变了之后探针重新量：spacer 的高度 = 行数 × 实际行高。
   const rowCheck = async label => {
     const { actual, per } = await evaluate(`(() => { const row = document.querySelector('.row.entry').getBoundingClientRect().height;
@@ -147,6 +170,7 @@ try {
   const rowHeight = () => evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`);
   await open('mac', 'mac', 'light');
   await rowCheck('Mac 浅色');
+  check('Mac：滚动位置为 0 时第一行紧挨标题，没被遮挡', await evaluate(`(() => { const sec = document.querySelector('.section').getBoundingClientRect(), row = document.querySelector('.row').getBoundingClientRect(); return row.top >= sec.bottom - 0.01 && row.top - sec.bottom < 1; })()`));
   check('Mac：13px 时实际行高 26', (await rowHeight()) === 26, String(await rowHeight()));
   await evaluate(`postMessage({ harness: 'theme', kind: 'dark', fontSize: '20px' }, '*')`);
   await wait(300);
@@ -154,11 +178,32 @@ try {
   await rowCheck('Mac 换深色并改字号后');
   await open('portrait', 'ios', 'light');
   await rowCheck('iPhone 竖屏');
-  check('iPhone：行高 44', (await evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`)) === 44);
+  check('iPhone：行高 58', (await evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`)) === 58);
   check('iPhone：不显示分区标题', await evaluate(`getComputedStyle(document.querySelector('.section')).display === 'none'`));
   await evaluate(`postMessage({ harness: 'theme', kind: 'dark' }, '*')`);
   await wait(300);
   await rowCheck('iPhone 换深色后');
+
+
+  // iPhone 的两行列表：58 点行高由 CSS 定、探针量得到；第二行是 日期 · 大小；不能打开的条目只有名字、垂直居中；分隔线从图标之后开始。
+  await open('portrait', 'ios', 'light');
+  await rowCheck('iPhone 58 点');
+  const two = await evaluate(`(() => { const rows = [...document.querySelectorAll('.row.entry')], q = (row, cls) => row.querySelector(cls), box = n => n.getBoundingClientRect();
+    const normal = rows.find(r => r.textContent.includes('LICENSE')), dead = rows.find(r => r.classList.contains('dead')), rb = box(normal);
+    const sub = q(normal, '.sub'), name = q(normal, '.name'), d = box(q(dead, '.name')), db = box(dead), dir = rows.find(r => r.classList.contains('dir'));
+    const second = rows[1], third = rows[2], before = getComputedStyle(second, '::before'), first = getComputedStyle(rows[0], '::before');
+    return { normalH: rb.height, sub: sub.textContent, subShown: getComputedStyle(sub).display !== 'none', subInside: box(sub).top >= box(name).bottom - 1 && box(sub).bottom <= rb.bottom && box(name).top >= rb.top,
+      metaHidden: getComputedStyle(q(normal, '.meta')).display === 'none', deadSub: q(dead, '.sub') === null, deadH: db.height, deadCentered: Math.abs((d.top + d.bottom) / 2 - (db.top + db.bottom) / 2) < 0.6,
+      dirSub: q(dir, '.sub').textContent, sepLeft: before.left, sepHeight: before.height, sepTop: before.top, firstSep: first.content, thirdSep: getComputedStyle(third, '::before').left,
+      stepOk: Math.abs(box(third).top - box(second).top - 58) < 0.01 }; })()`);
+  check('iPhone：两行列表，名字下面是 日期 · 大小（往年/今年/今天的格式），文件夹大小是 —，Mac 的 meta 隐藏', two.normalH === 58 && /^2025年3月 · \d+ B$/.test(two.sub) && two.subShown && two.subInside && two.metaHidden && /^\d\d:\d\d · —$/.test(two.dirSub), JSON.stringify(two));
+  check('iPhone：不能打开的条目只有名字，行高 58，名字垂直居中', two.deadSub && two.deadH === 58 && two.deadCentered, JSON.stringify(two));
+  check('iPhone：分隔线 1 点，从图标之后开始（首行没有），行距 58', two.sepHeight === '1px' && two.sepLeft === '46px' && two.sepTop === '0px' && two.firstSep === 'none' && two.thirdSep === '46px' && two.stepOk, JSON.stringify(two));
+
+  // 状态行和「再显示」也是 58 点：展开 locked（读取失败的目录有一行状态）。
+  await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('locked')).click()`);
+  await until(`[...document.querySelectorAll('.row.status')].length > 0`, '状态行出现');
+  check('iPhone：状态行也是 58 点', await evaluate(`[...document.querySelectorAll('.row.status')].every(r => r.getBoundingClientRect().height === 58)`));
 
   // 卡片末行：滚到底，最后一行完整在卡片里，卡片没有裁掉内容。
   for (const size of ['portrait', 'landscape']) {
@@ -167,7 +212,7 @@ try {
       await new Promise(r => setTimeout(r, 200));
       const rows = [...document.querySelectorAll('.row')], last = rows.at(-1).getBoundingClientRect(), card = document.querySelector('.spacer'), c = card.getBoundingClientRect(), pane = p.getBoundingClientRect();
       return { lastText: rows.at(-1).textContent, lastH: last.height, inCard: last.bottom <= c.bottom + 0.01, cardFits: card.scrollHeight <= card.clientHeight, inPane: last.bottom <= pane.bottom + 0.01, cardBottom: c.bottom, paneBottom: pane.bottom }; })()`);
-    check(`iPhone ${size}：卡片末行完整可见`, end.lastText.includes('zz-119') && end.lastH === 44 && end.inCard && end.cardFits && end.inPane, JSON.stringify(end));
+    check(`iPhone ${size}：卡片末行完整可见`, end.lastText.includes('zz-119') && end.lastH === 58 && end.inCard && end.cardFits && end.inPane, JSON.stringify(end));
   }
 
   // iPhone 文件页的底部工具条：完整在视口里，操作区至少 44 点，安全区另加；代码区最后一行能滚到工具条上方。
@@ -236,6 +281,50 @@ try {
     check(`Mac ${theme}：再按一次「更多」只关闭`, await evaluate(`document.getElementById('menu').hidden`));
   }
 
+
+  // Mac 的 meta：容器查询指定了查询祖先（#tree）。宽度够时显示（名字截断、meta 不缩），窄于约 220 点时隐藏。
+  await open('mac', 'mac', 'light');
+  const wide = await evaluate(`(() => { const rows = [...document.querySelectorAll('.row.entry')], box = n => n.getBoundingClientRect();
+    const long = rows.find(r => r.textContent.includes('${LONG_NAME.slice(0, 12)}')), plain = rows.find(r => r.textContent.includes('LICENSE')), name = long.querySelector('.name'), meta = long.querySelector('.meta');
+    return { shown: getComputedStyle(meta).display !== 'none', truncated: name.scrollWidth > name.clientWidth, metaW: box(meta).width, plainW: box(plain.querySelector('.meta')).width,
+      inRow: box(meta).right <= box(long).right + 0.01, text: plain.querySelector('.meta').textContent, tree: document.getElementById('tree').clientWidth,
+      container: getComputedStyle(document.getElementById('tree')).containerType, subHidden: getComputedStyle(long.querySelector('.sub')).display === 'none' }; })()`);
+  check('Mac 宽度够：meta 显示（大小），长名字被截断而 meta 不缩，meta 在行内；iPhone 的第二行隐藏', wide.shown && wide.truncated && wide.metaW > 0 && wide.metaW === wide.plainW && wide.inRow && wide.text === '2 B' && wide.container === 'inline-size' && wide.subHidden, JSON.stringify(wide));
+  await open('narrow', 'mac', 'light');
+  const narrow = await evaluate(`(() => ({ tree: document.getElementById('tree').clientWidth, shown: [...document.querySelectorAll('.meta')].filter(m => m.getClientRects().length > 0).length, total: document.querySelectorAll('.meta').length }))()`);
+  check('Mac 窄于 220 点：meta 全部隐藏', narrow.tree < 220 && narrow.total > 0 && narrow.shown === 0, JSON.stringify(narrow));
+
+  // 排序控件和菜单：Mac 在标题行右边；iPhone 在根目录名和 ⋯ 之间，根目录名长时截断的是名字。菜单四项，完整在页面内，当前项有对勾和箭头。
+  const menuBox = `(() => { const m = document.getElementById('menu'), r = m.getBoundingClientRect(), items = [...m.querySelectorAll('button')];
+    return { shown: !m.hidden, names: items.map(x => x.textContent), roles: items.map(x => x.getAttribute('aria-checked')), heights: items.map(x => x.getBoundingClientRect().height), left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: innerWidth, h: innerHeight }; })()`;
+  for (const theme of ['light', 'dark']) {
+    await open('mac', 'mac', theme);
+    const place = await evaluate(`(() => { const sec = document.querySelector('.section'), name = sec.querySelector('.section-name').getBoundingClientRect(), b = sec.querySelector('.sort'), r = b.getBoundingClientRect(), s = sec.getBoundingClientRect();
+      return { label: b.getAttribute('aria-label'), text: b.textContent, right: r.right <= s.right && r.left >= name.right - 0.5, inside: r.top >= s.top && r.bottom <= s.bottom + 0.5 }; })()`);
+    check(`Mac ${theme}：排序控件在标题行根目录名右边，写全可访问名称`, place.label === '排序：名称，升序' && place.text === '名称' && place.right && place.inside, JSON.stringify(place));
+    await evaluate(`document.querySelector('.sort').click()`);
+    const mac = await evaluate(menuBox);
+    check(`Mac ${theme}：排序菜单四项，当前项有对勾和箭头，完整在页面内`, mac.shown && JSON.stringify(mac.names) === JSON.stringify(['名称 ↑', '种类', '日期', '大小']) && JSON.stringify(mac.roles) === JSON.stringify(['true', 'false', 'false', 'false'])
+      && mac.left >= 0 && mac.right <= mac.w && mac.top >= 0 && mac.bottom <= mac.h, JSON.stringify(mac));
+  }
+  for (const size of ['portrait', 'landscape']) {
+    await open(size, 'ios', 'light');
+    const [sl, sr] = size === 'landscape' ? [59, 59] : [0, 0];
+    const bar = await evaluate(`(() => { const b = document.getElementById('bar'), title = b.querySelector('.bar-title').getBoundingClientRect(), sort = b.querySelector('[aria-label^="排序"]').getBoundingClientRect(), more = b.querySelector('[aria-label="更多"]').getBoundingClientRect();
+      return { order: title.right <= sort.left + 0.5 && sort.right <= more.left + 0.5, h: sort.height, w: sort.width, label: b.querySelector('[aria-label^="排序"]').getAttribute('aria-label'), inside: more.right <= innerWidth - ${sr} }; })()`);
+    check(`iPhone ${size}：排序在根目录名和 ⋯ 之间，至少 44 点`, bar.order && bar.h >= 44 && bar.w >= 44 && bar.label === '排序：名称，升序' && bar.inside, JSON.stringify(bar));
+    await evaluate(`document.querySelector('[aria-label^="排序"]').click()`);
+    const menu = await evaluate(menuBox);
+    check(`iPhone ${size}：排序菜单四项，项至少 44 点，完整在安全区内`, menu.shown && JSON.stringify(menu.names) === JSON.stringify(['名称 ↑', '种类', '日期', '大小']) && menu.heights.every(x => x >= 44)
+      && menu.left >= sl && menu.right <= menu.w - sr && menu.top >= 0 && menu.bottom <= menu.h, JSON.stringify(menu));
+  }
+  // 根目录名很长：截断的是名字，排序和 ⋯ 完整。
+  await open('portrait', 'ios', 'light');
+  const longName = await evaluate(`(() => { const b = document.getElementById('bar'), title = b.querySelector('.bar-title'); title.textContent = 'a-project-folder-with-an-extremely-long-name-that-cannot-fit-in-the-bar-at-all';
+    const sort = b.querySelector('[aria-label^="排序"]'), sr = sort.getBoundingClientRect(), more = b.querySelector('[aria-label="更多"]').getBoundingClientRect(), text = sort.querySelector('span');
+    return { truncated: title.scrollWidth > title.clientWidth, sortW: sr.width, textFits: text.scrollWidth <= text.clientWidth, moreInside: more.right <= innerWidth, sortInside: sr.right <= more.left + 0.5 && sr.left >= 0 }; })()`);
+  check('iPhone：根目录名长时截断名字，排序按钮完整', longName.truncated && longName.textFits && longName.moreInside && longName.sortInside && longName.sortW >= 44, JSON.stringify(longName));
+
   // Mac 预览头部：图标按钮 28 点，有 aria-label 和 title，元信息是 行数 · 大小。
   await open('mac', 'mac', 'light');
   // 先展开 src、把目录树滚到非零位置：返回之后这两样都要在。
@@ -270,6 +359,15 @@ try {
     await evaluate(`[...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('notes.txt')).click()`);
     await until(`document.querySelector('.text')`, 'Mac 预览出现');
     await shoot(`mac-preview-${theme}`);
+    // 按日期、按大小排序，菜单打开的样子（Mac）。
+    await open('mac', 'mac', theme);
+    await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('src')).click()`);
+    await pick('日期');
+    await shoot(`mac-sidebar-date-${theme}`);
+    await pick('大小');
+    await shoot(`mac-sidebar-size-${theme}`);
+    await evaluate(`document.querySelector('.sort').click()`);
+    await shoot(`mac-sidebar-size-${theme}-sortmenu`);
     for (const size of ['portrait', 'landscape']) {
       await open(size, 'ios', theme, { state: picked });
       await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('src')).click()`);
@@ -277,6 +375,19 @@ try {
       await shoot(`ios-${size}-${theme}`);
       await evaluate(`document.querySelector('[aria-label="更多"]').click()`);
       await shoot(`ios-${size}-${theme}-menu`);
+      await evaluate(`document.querySelector('[aria-label^="排序"]').click()`);
+      await shoot(`ios-${size}-${theme}-sortmenu`);
+      // 长按一行：菜单里路径下面有 大小 · 完整修改时间。
+      await evaluate(`document.getElementById('menu').hidden = true`);
+      const held = await evaluate(`(async () => { const row = [...document.querySelectorAll('.row.entry')].find(r => r.textContent.includes('LICENSE')), r = row.getBoundingClientRect();
+        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.left + 80, clientY: r.top + 20 })); await new Promise(x => setTimeout(x, 700));
+        const m = document.getElementById('menu').getBoundingClientRect(); return { shown: !document.getElementById('menu').hidden, path: document.querySelector('.menu-path')?.textContent, info: document.querySelector('.menu-info')?.textContent,
+          inside: m.left >= 0 && m.right <= innerWidth && m.top >= 0 && m.bottom <= innerHeight }; })()`);
+      check(`iPhone ${size} ${theme}：长按菜单有信息行，完整在页面内`, held.shown && held.path === 'LICENSE' && /^2 B · 2025-03-04 10:00:00$/.test(held.info) && held.inside, JSON.stringify(held));
+      await shoot(`ios-${size}-${theme}-longpress`);
+      await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+      await pick('日期', '[aria-label^="排序"]');
+      await shoot(`ios-${size}-${theme}-date`);
       await openFile(size, theme);
       await shoot(`ios-${size}-${theme}-file`);
     }
