@@ -271,3 +271,20 @@ test('换会话：context 和 session 两条消息谁先到都一样，对上之
     assert.equal(text(page), 'bbbbb');
   }
 });
+
+test('只收到 session、没有 root：30 秒后也提示，之后 root 到达就恢复；已有 root 不再提示', async t => {
+  const { page, host, tick } = await open(t);
+  host.generation++;
+  host.root = { state: 'ready', path: '/A' };
+  page.post({ type: 'session', generation: host.generation, session: 's1' });
+  tick(30_000);
+  await flush();
+  assert.match(page.notice.textContent, /没有连上.*30 秒没有收到回答/);
+  page.post({ type: 'root', generation: host.generation, ...host.root });
+  await flush();
+  assert.equal(text(page), 'aaaaa');
+  assert.equal(visible(page.notice), false);
+  tick(60_000);
+  await flush();
+  assert.equal(visible(page.notice), false, '已收到 root，不再提示');
+});

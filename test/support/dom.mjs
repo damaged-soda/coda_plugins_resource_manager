@@ -52,8 +52,10 @@ export class Element extends Emitter {
   setAttribute(name, value) { if (name === 'class') this.className = value; else this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
 
+  // 焦点：和浏览器一样，聚焦的元素被摘掉后 activeElement 回到没有。
+  focus() { globalThis.document.activeElement = this; }
   replaceChildren(...nodes) {
-    for (const child of this.children) child.parent = null;
+    for (const child of this.children) { if (child.contains?.(globalThis.document?.activeElement)) globalThis.document.activeElement = null; child.parent = null; }
     this.children = [];
     this.append(...nodes);
   }

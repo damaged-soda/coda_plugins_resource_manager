@@ -57,6 +57,7 @@ export class Link {
 // 建立连接并开始监听模块的消息；调用 hello() 才发出握手。
 // handlers：session、root、changed。session 先作废旧代次的请求再交给页面；
 // root、changed 只在代次等于当前时才交出；listed、chunk 直接对应请求，页面不用管。
+// 握手的结束条件是收到首个 root；之后不再提示超时。
 // onStatus：握手状态变了（开始、失败、重试）时调用，页面据此重画说明。
 export function connect(coda, { handlers, onStatus = () => {} }) {
   const link = new Link({ post: message => coda.postMessage(message) });
@@ -73,14 +74,16 @@ export function connect(coda, { handlers, onStatus = () => {} }) {
     if (!data || typeof data !== 'object') return;
     switch (data.type) {
       case Type.SESSION:
-        answered = true;
-        clearTimeout(timer);
-        failure = null;
         link.reset(data.generation);
         return handlers.session(data);
       case Type.ROOT: case Type.CHANGED:
-        if (data.generation === link.generation) handlers[data.type](data);
-        return;
+        if (data.generation !== link.generation) return;
+        if (data.type === Type.ROOT) { // 首个 root 才算模块回答了：只收到 session 时页面还是空的，照样要提示
+          answered = true;
+          clearTimeout(timer);
+          failure = null;
+        }
+        return handlers[data.type](data);
       case Type.LISTED: case Type.CHUNK:
         link.receive(data);
     }

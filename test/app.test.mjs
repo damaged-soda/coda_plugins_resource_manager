@@ -252,3 +252,41 @@ test('hello 发不出去：立刻给出原因，重试可用', async t => {
   assert.equal(page.notice.textContent, '正在读取…');
   assert.ok(host);
 });
+
+test('只收到 session、没有 root：30 秒后也提示，之后 root 到达就恢复；已有 root 不再提示', async t => {
+  const { page, host, tick } = await open(t, { roots: { '/A': tree('aaaaa') } });
+  host.generation++;
+  host.root = { state: 'ready', path: '/A' };
+  page.post({ type: 'session', generation: host.generation, session: 's1' });
+  tick(29_999);
+  await flush();
+  assert.equal(page.notice.textContent, '正在读取…');
+  tick(1);
+  await flush();
+  assert.match(page.notice.textContent, /没有连上.*30 秒没有收到回答/);
+  assert.ok(visible(page.notice));
+  page.post({ type: 'root', generation: host.generation, ...host.root });
+  await flush();
+  assert.ok(visible(page.tree));
+  assert.equal(visible(page.notice), false);
+  assert.ok(row(page, FILE));
+  tick(60_000);
+  await flush();
+  assert.equal(visible(page.notice), false, '已收到 root，不再提示');
+});
+
+test('说明区重画后焦点不丢到页面外：重试按钮聚焦时点它，焦点留在说明区，再失败时落在新按钮上；没聚焦时不抢', async t => {
+  const { page, tick } = await open(t, { roots: { '/A': tree('aaaaa') } });
+  tick(30_000);
+  await flush();
+  assert.equal(document.activeElement ?? null, null, '没有聚焦就不抢焦点');
+  const retry = button(page.notice, '重试');
+  retry.focus();
+  retry.dispatch('click'); // 重试：说明区换成「正在读取…」，聚焦的按钮被摘掉
+  await flush();
+  assert.equal(page.notice.textContent, '正在读取…');
+  assert.ok(page.notice.contains(document.activeElement), '焦点在说明区里');
+  tick(30_000);
+  await flush();
+  assert.equal(document.activeElement, button(page.notice, '重试'), '再次失败，焦点落在新的重试按钮上');
+});

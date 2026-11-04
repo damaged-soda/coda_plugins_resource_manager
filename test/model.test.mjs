@@ -1,7 +1,7 @@
 // 页面状态层（view/model.mjs、view/tree.mjs 的纯部分）：请求与代次、目录替换、根目录状态、状态保留。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MAX_PARALLEL, byteSize, parseState, putSession, trimState } from '../view/model.mjs';
+import { MAX_PARALLEL, RESTORE_LIMIT, byteSize, parseState, putSession, trimState } from '../view/model.mjs';
 import { visibleRows } from '../view/tree.mjs';
 import { flush } from './support/fake.mjs';
 import { entries, manual } from './support/page.mjs';
@@ -432,4 +432,41 @@ test('状态裁剪：条数算进总量，先于展开目录被舍；超限不�
   assert.doesNotThrow(() => trimState(state, 's', 10));
   const parsed = parseState({ v: 1, sessions: { A: { expanded: [], loaded: { x: 3, y: -1, z: 1.5, w: '9', big: 1e9, [`${'p'.repeat(2000)}`]: 4 } } } });
   assert.deepEqual(parsed.sessions.A.loaded, { x: 3 });
+});
+
+test('恢复时取页失败：重试仍取够保存的条数，不退回只取第一页', async () => {
+  const t = manual();
+  t.session(1, 'A', { expanded: [], loaded: { '': 4 } });
+  t.root(1);
+  t.reply((await t.lists(''))[0], { ...entries(['a.txt', 'b.txt']), nextCursor: 'c1' });
+  t.fail((await t.lists('')).at(-1), 'io_error', '读取失败'); // 第二页失败
+  await flush();
+  assert.equal(t.model.dirs.get('').loaded, false);
+  t.model.retry('');
+  t.reply((await t.lists('')).at(-1), { ...entries(['a.txt', 'b.txt']), nextCursor: 'c1' });
+  const second = (await t.lists('')).at(-1);
+  assert.equal(second.cursor, 'c1', '重试后还要接着取');
+  t.reply(second, entries(['c.txt', 'd.txt']));
+  await flush();
+  assert.equal(names(t.model).length, 4);
+  assert.equal(t.model.wanted.has(''), false, '成功后才删');
+});
+
+test('恢复时的条数上限：保存的条数超过 RESTORE_LIMIT，按上限取，不会一路取下去', async () => {
+  assert.equal(RESTORE_LIMIT, 20_000);
+  const t = manual();
+  t.session(1, 'A', { expanded: [], loaded: { '': 50_000 } });
+  t.root(1);
+  const page = () => entries(Array.from({ length: 2000 }, (_, i) => `f${i}.txt`), 'more');
+  for (let i = 1; i <= 10; i++) {
+    const lists = await t.lists('');
+    assert.equal(lists.length, i);
+    t.reply(lists.at(-1), page());
+    await flush();
+  }
+  assert.equal((await t.lists('')).length, 10, '取够 20,000 条就停');
+  const dir = t.model.dirs.get('');
+  assert.equal(dir.loaded, true);
+  assert.equal(dir.entries.length, 20_000);
+  assert.equal(dir.next, 'more', '后面还有，仍可「再显示」');
 });

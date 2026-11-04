@@ -4,6 +4,9 @@ import { ErrorCode, RootState, Type } from './protocol.mjs';
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
 export const MAX_LOADED = 100_000; // 读回保存的条数时认的上界（view 侧校验用），与服务端的条目上限各自独立
+// 恢复时每个目录最多取够这么多条（约 10 页）：#reload 串行取够才显示，条数太大返回后会等很久。
+// 只管「按保存的条数恢复」，用户已经翻出来的条数不受限；也和 lib/tree.mjs 的目录上限无关。
+export const RESTORE_LIMIT = 20_000;
 const MAX_LOADED_DIRS = 500;
 const HIDDEN = new Set(['.git', '.DS_Store']);
 export const isHidden = name => HIDDEN.has(name);
@@ -57,7 +60,7 @@ export class Model {
     this.session = session ?? null;
     this.root = null;
     this.dirs = new Map();
-    this.wanted = new Map(Object.entries(saved?.loaded ?? {}));
+    this.wanted = new Map(Object.entries(saved?.loaded ?? {}).map(([path, count]) => [path, Math.min(count, RESTORE_LIMIT)]));
     const paths = (saved?.expanded ?? []).filter(path => path !== '');
     this.expanded = new Set(paths.filter(path => !path.includes('/') || paths.includes(path.slice(0, path.lastIndexOf('/')))));
     this.selected = saved?.selected ?? null;
@@ -89,7 +92,6 @@ export class Model {
     let dir = this.dirs.get(path);
     if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0, pages: 0 });
     const token = ++dir.token, want = Math.max(dir.entries.length, this.wanted.get(path) ?? 0);
-    this.wanted.delete(path);
     dir.loading = true;
     this.onChange();
     const current = () => this.link.generation === generation && this.dirs.get(path) === dir && dir.token === token;
@@ -105,6 +107,7 @@ export class Model {
       } while (next && entries.length < want);
       if (!current()) return;
       Object.assign(dir, { entries, next, loaded: true, error: null, pages });
+      this.wanted.delete(path); // 成功后才删：取页失败后重试还要取够保存的条数
     } catch (error) {
       if (error.stale || !current()) return;
       if (error.code === ErrorCode.NOT_FOUND && path !== '') this.#drop(path);

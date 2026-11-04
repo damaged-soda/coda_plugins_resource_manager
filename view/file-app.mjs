@@ -3,6 +3,7 @@
 import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
 import { noticeText } from './model.mjs';
+import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
 import { RootState } from './protocol.mjs';
 
@@ -75,15 +76,7 @@ function paintNotice() {
       : noticeText(session === want.session ? root : null, session);
   if (key === noticeKey) return;
   noticeKey = key;
-  if (!failed || want.path === null) { $('notice').textContent = key; return; }
-  const retry = document.createElement('button'), title = document.createElement('p'), reason = document.createElement('p');
-  title.textContent = '没有连上资源管理器的后台';
-  reason.className = 'secondary';
-  reason.textContent = conn.failure;
-  retry.className = 'link';
-  retry.textContent = '重试';
-  retry.addEventListener('click', conn.hello);
-  $('notice').replaceChildren(title, reason, retry);
+  showNotice($('notice'), failed && want.path !== null ? { failure: conn.failure, retry: conn.hello } : { text: key });
 }
 
 // ---- 模块的消息（代次和握手由 connection 处理）----

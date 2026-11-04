@@ -2,6 +2,7 @@
 import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
 import { Model, STATE_LIMIT, noticeText, parseState, putSession, trimState } from './model.mjs';
+import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
 import { RootState } from './protocol.mjs';
 import { mountTree } from './tree.mjs';
@@ -26,7 +27,7 @@ const tree = mountTree($('tree'), model, {
   more: path => model.loadMore(path),
   retry: path => model.retry(path),
   menu: (event, path) => showMenu(event, path),
-}, { draggable: !isIOS });
+}, { draggable: !isIOS, longPress: isIOS });
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
   actions: isIOS ? [] : [{ label: '窗口', run: openInView }],
@@ -41,11 +42,22 @@ function showHint(text) {
   clearTimeout(hintTimer);
   hintTimer = setTimeout(() => { $('hint').hidden = true; }, 5000);
 }
+// iPhone 防连点：open 进行中、成功后推入动画的这一小段都忽略重复点击；失败立刻放开。
+let opening = false;
+const REOPEN_MS = 1000;
 function openInView(path) {
+  if (isIOS) opening = true;
   return Promise.resolve().then(() => coda.open({ view: 'file', args: { session: model.session, path } }))
-    .then(() => { $('hint').hidden = true; }, error => showHint(`打不开文件：${error?.message ?? '未知原因'}`));
+    .then(() => {
+      $('hint').hidden = true;
+      if (isIOS) setTimeout(() => { opening = false; }, REOPEN_MS);
+    }, error => {
+      opening = false;
+      showHint(`打不开文件：${error?.message ?? '未知原因'}`);
+    });
 }
 function openFile(path) {
+  if (isIOS && opening) return; // 先于 select 和保存：被忽略的点击什么都不改
   model.select(path);
   if (!isIOS) return;
   saveNow(); // 视图随即卸载，这一刻的展开状态、条数和滚动位置先存下
@@ -70,15 +82,7 @@ function paintNotice() {
   const key = failed ? `hello:${conn.failure}` : noticeText(model.root, model.session);
   if (key === noticeKey) return;
   noticeKey = key;
-  if (!failed) { $('notice').textContent = key; return; }
-  const retry = document.createElement('button'), title = document.createElement('p'), reason = document.createElement('p');
-  title.textContent = '没有连上资源管理器的后台';
-  reason.className = 'secondary';
-  reason.textContent = conn.failure;
-  retry.className = 'link';
-  retry.textContent = '重试';
-  retry.addEventListener('click', conn.hello);
-  $('notice').replaceChildren(title, reason, retry);
+  showNotice($('notice'), failed ? { failure: conn.failure, retry: conn.hello } : { text: key });
 }
 
 function render() {
@@ -146,19 +150,24 @@ quiet(() => coda.on('visibility', visible => { if (!visible) saveNow(); }));
 $('tree').addEventListener('scroll', queueSave, { passive: true });
 preview.onScroll(queueSave);
 
-// ---- 复制路径的右键菜单 ----
+// ---- 复制路径的菜单：Mac 右键、iPhone 长按 ----
+// 菜单顶上写完整的相对路径：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全。
+// 位置按安全区夹住（横屏时客户端不替页面留）；offsetWidth 在显示后才量得到。
 const menu = $('menu');
 function showMenu(event, path) {
   const entries = [['复制相对路径', path], ['复制绝对路径', `${model.root.path}/${path}`]];
-  menu.replaceChildren(...entries.map(([label, text]) => {
+  const title = document.createElement('p');
+  title.className = 'menu-path secondary';
+  title.textContent = path;
+  menu.replaceChildren(title, ...entries.map(([label, text]) => {
     const button = document.createElement('button');
     button.textContent = label;
     button.addEventListener('click', () => { coda.copy(text); hideMenu(); });
     return button;
   }));
   menu.hidden = false;
-  menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth - 4))}px`;
-  menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight - 4))}px`;
+  menu.style.left = `max(var(--safe-left), min(${event.clientX}px, calc(100vw - var(--safe-right) - ${menu.offsetWidth + 4}px)))`;
+  menu.style.top = `max(var(--safe-top), min(${event.clientY}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
 }
 const hideMenu = () => { menu.hidden = true; };
 document.addEventListener('pointerdown', event => { if (!menu.contains(event.target)) hideMenu(); }, true);
