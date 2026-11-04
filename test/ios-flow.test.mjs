@@ -7,7 +7,7 @@ import { activate } from '../main.mjs';
 import { loadApp, loadFileApp } from './support/dom.mjs';
 import { checkoutOf, deferred, fakeCoda, tempDir, waitFor } from './support/fake.mjs';
 
-const COUNT = 1500; // 名字取长一点，一页（96 KiB）放不下，需要两页
+const COUNT = 1000; // 名字取长一点，带上大小和修改时间后一页（96 KiB）放不下，需要两页
 const name = i => `file-${String(i).padStart(4, '0')}-${'x'.repeat(80)}.txt`;
 
 // 挂一个树页：getState 给上次存下的状态，coda.open 记下参数。

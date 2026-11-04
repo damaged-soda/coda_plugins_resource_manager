@@ -1,5 +1,5 @@
 // 页面的纯状态：目录树、状态保留。不碰 DOM，请求与代次在 connection.mjs，设计见 docs/design/phase-1.md 第 6、7 节。
-import { ErrorCode, RootState, Type } from './protocol.mjs';
+import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
@@ -39,6 +39,8 @@ export class Model {
   wanted = new Map(); // 恢复状态时各目录要取够的条数，第一次取用后删掉
   selected = null;
   showHidden = false;
+  sort = { ...DEFAULT_SORT }; // 全局一份，由页面存进 persisted
+  #round = 0; // refresh 的轮次：新一轮开始后，旧一轮不再派发排队的目录
 
   constructor({ link, onChange = () => {} }) { Object.assign(this, { link, onChange }); }
 
@@ -57,6 +59,7 @@ export class Model {
   // 换会话：清空一切，展开状态换成这个会话保存的。
   onSession({ generation, session }, saved = null) {
     this.link.reset(generation);
+    this.#round++;
     this.session = session ?? null;
     this.root = null;
     this.dirs = new Map();
@@ -79,34 +82,55 @@ export class Model {
     return generation === this.link.generation && this.ready ? this.refresh() : null;
   }
 
-  // 重新取根和全部已展开的目录，并行不超过 8 个。
-  refresh() {
+  // 重新取根和全部已展开的目录，并行不超过 8 个。cap：这一轮每个目录最多取够这么多条（换排序时用）。
+  // 每一轮带递增的轮次：只查 current() 不够，旧一轮的池子还会启动排队中的目录，递增它们的 token，作废较新的加载。
+  refresh({ cap = Infinity } = {}) {
     if (!this.ready) return Promise.resolve();
-    const { generation } = this.link;
-    return pool(['', ...this.expanded], MAX_PARALLEL, path => this.#reload(path, generation));
+    const { generation } = this.link, round = ++this.#round;
+    return pool(['', ...this.expanded], MAX_PARALLEL, path => (round === this.#round ? this.#reload(path, generation, { cap }) : undefined));
   }
 
-  // 取够已加载的条数，一次替换；同目录有更新的请求就作废这一个。
-  async #reload(path, generation) {
+  // 换排序：已加载的目录按新顺序重新取，取够现在的条数，这次最多 RESTORE_LIMIT 条；每个目录一次替换。
+  setSort(sort) {
+    const next = parseSort(sort);
+    if (!next || (next.key === this.sort.key && next.desc === this.sort.desc)) return Promise.resolve();
+    this.sort = next;
+    this.onChange();
+    return this.refresh({ cap: RESTORE_LIMIT });
+  }
+
+  // 取够已加载的条数，一次替换；同目录有更新的请求就作废这一个。一次加载固定一种排序。
+  // more、expired：「再显示」遇到游标过期转过来时，条数要比现在多一条，而且已经算重取过一次，不再重取。
+  async #reload(path, generation, { cap = Infinity, more = false, expired = false } = {}) {
     if (this.link.generation !== generation) return; // 排队时会话已换，旧任务不碰新会话
     let dir = this.dirs.get(path);
-    if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0, pages: 0 });
-    const token = ++dir.token, want = Math.max(dir.entries.length, this.wanted.get(path) ?? 0);
+    if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0, pages: 0, sortFallback: false });
+    const token = ++dir.token, { sort } = this;
+    const want = more ? dir.entries.length + 1 : Math.min(Math.max(dir.entries.length, this.wanted.get(path) ?? 0), cap);
     dir.loading = true;
     this.onChange();
     const current = () => this.link.generation === generation && this.dirs.get(path) === dir && dir.token === token;
     try {
-      const entries = [];
-      let next = null, pages = 0;
+      let entries = [], next = null, pages = 0, sortFallback = false;
       do {
-        const reply = await this.link.call('list', { path, cursor: next });
-        if (this.link.generation !== generation) return; // 回答到了、继续前会话换了，不再取下一页
+        let reply;
+        try {
+          reply = await this.link.call('list', { path, cursor: next, sort });
+        } catch (error) {
+          // 游标过期（快照被淘汰、释放，或根目录变了）：丢掉这一轮累积的，从第一页重取一次，再失败走失败行。
+          if (error.code !== ErrorCode.CURSOR_EXPIRED || expired || !current()) throw error;
+          expired = true;
+          entries = []; next = null; pages = 0; sortFallback = false;
+          continue;
+        }
+        if (!current()) return; // 回答到了、继续前会话换了或有更新的加载，不再取下一页
+        if (pages === 0) sortFallback = reply.sortFallback === true;
         entries.push(...reply.entries);
         next = reply.nextCursor ?? null;
         pages++;
-      } while (next && entries.length < want);
+      } while (pages === 0 || (next && entries.length < want));
       if (!current()) return;
-      Object.assign(dir, { entries, next, loaded: true, error: null, pages });
+      Object.assign(dir, { entries, next, loaded: true, error: null, pages, sortFallback });
       this.wanted.delete(path); // 成功后才删：取页失败后重试还要取够保存的条数
     } catch (error) {
       if (error.stale || !current()) return;
@@ -145,12 +169,15 @@ export class Model {
     this.onChange();
     const current = () => this.link.generation === generation && this.dirs.get(path) === dir && dir.token === token;
     try {
-      const reply = await this.link.call('list', { path, cursor: dir.next });
+      const reply = await this.link.call('list', { path, cursor: dir.next, sort: this.sort });
       if (!current()) return;
       dir.entries = dir.entries.concat(reply.entries);
       Object.assign(dir, { next: reply.nextCursor ?? null, error: null, pages: dir.pages + 1 });
     } catch (error) {
-      if (!error.stale && current()) dir.error = { code: error.code, message: error.message };
+      if (error.stale || !current()) return;
+      // 游标过期：从第一页重取，条数比现在多一条，所以还会接着往下取。重取自己管 loading。
+      if (error.code === ErrorCode.CURSOR_EXPIRED) return this.#reload(path, generation, { more: true, expired: true });
+      dir.error = { code: error.code, message: error.message };
     } finally {
       if (current()) dir.loading = false;
       this.onChange();
@@ -178,9 +205,10 @@ const parseLoaded = raw => Object.fromEntries(Object.entries(raw && typeof raw =
 
 // 读回来的值可能是别的版本或坏的，只认自己的形状。
 export function parseState(raw) {
-  const state = { v: 1, seq: 0, hidden: false, sessions: {} };
+  const state = { v: 1, seq: 0, hidden: false, sort: { ...DEFAULT_SORT }, sessions: {} };
   if (!raw || typeof raw !== 'object' || raw.v !== 1) return state;
   state.hidden = raw.hidden === true;
+  state.sort = parseSort(raw.sort) ?? { ...DEFAULT_SORT };
   state.seq = Number.isSafeInteger(raw.seq) ? raw.seq : 0;
   for (const [id, item] of Object.entries(raw.sessions ?? {})) {
     if (!item || typeof item !== 'object') continue;

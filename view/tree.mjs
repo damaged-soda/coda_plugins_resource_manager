@@ -17,6 +17,8 @@ export function visibleRows(model) {
     if (!state.loaded) return rows.push({ type: 'status', path: dir, depth, text: `读取失败：${state.error.message}`, retry: true });
     // 刷新失败：旧条目保留，最上方加一行原因，点它重试。这一行不算内容，空目录的判断在它之后。
     if (state.error) rows.push({ type: 'status', path: dir, depth, text: `更新失败：${state.error.message}`, retry: true });
+    // 条目太多按名称排了：说明行固定行高，不算内容，不影响「空目录」的判断。
+    if (state.sortFallback) rows.push({ type: 'status', path: dir, depth, text: '条目太多，只能按名称排列' });
     const before = rows.length;
     for (const entry of state.entries) {
       if (!model.showHidden && isHidden(entry.name)) continue;

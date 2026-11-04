@@ -21,12 +21,22 @@ export const RootState = Object.freeze({ READY: 'ready', NONE: 'none', PREPARING
 
 export const ErrorCode = Object.freeze({
   NO_ROOT: 'no_root', INVALID_PATH: 'invalid_path', OUTSIDE_ROOT: 'outside_root', NOT_FOUND: 'not_found',
-  NOT_DIR: 'not_dir', NOT_FILE: 'not_file', DENIED: 'denied', INVALID_CURSOR: 'invalid_cursor',
-  INVALID_OFFSET: 'invalid_offset', TOO_LARGE: 'too_large', IO: 'io_error',
+  NOT_DIR: 'not_dir', NOT_FILE: 'not_file', DENIED: 'denied', CURSOR_EXPIRED: 'cursor_expired',
+  INVALID_OFFSET: 'invalid_offset', INVALID_SORT: 'invalid_sort', TOO_LARGE: 'too_large', IO: 'io_error',
 });
+
+// 目录排序：key 是下面四种之一，desc 为 true 是降序。缺省（请求不带 sort）是名称升序。
+export const SortKey = Object.freeze({ NAME: 'name', KIND: 'kind', DATE: 'date', SIZE: 'size' });
+export const DEFAULT_SORT = Object.freeze({ key: SortKey.NAME, desc: false });
+// 形状对的返回规范化的 { key, desc }，否则 null。
+export function parseSort(raw) {
+  if (!raw || typeof raw !== 'object' || !Object.values(SortKey).includes(raw.key) || typeof raw.desc !== 'boolean') return null;
+  return { key: raw.key, desc: raw.desc };
+}
 
 // 目录条目的 kind：dir、file；link 是指向工作目录外或已失效的链接；other 是不能打开的（套接字、名字含控制字符等）。
 // 指向工作目录内的链接按目标显示成 dir 或 file，并带 link: true。
+// 条目还可带整数 size（只有文件有）和 mtimeMs（向下取整）；读不到时不带。
 export const EntryKind = Object.freeze({ DIR: 'dir', FILE: 'file', LINK: 'link', OTHER: 'other' });
 // 文件块的 kind。
 export const ContentKind = Object.freeze({ TEXT: 'text', IMAGE: 'image', BINARY: 'binary' });

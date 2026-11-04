@@ -55,7 +55,7 @@ test('完整链路：hello → session、root；list 分页；read 分块；越�
     ['list', { path: 'out' }, 'outside_root'],
     ['list', { path: 'src/a.txt' }, 'not_dir'],
     ['list', { path: 'nope' }, 'not_found'],
-    ['list', { path: '', cursor: '???' }, 'invalid_cursor'],
+    ['list', { path: '', cursor: '???' }, 'cursor_expired'],
     ['read', { path: 'out/secret.txt', offset: 0 }, 'outside_root'],
     ['read', { path: 'src\u0000', offset: 0 }, 'invalid_path'],
     ['read', { path: 'src', offset: 0 }, 'not_file'],
