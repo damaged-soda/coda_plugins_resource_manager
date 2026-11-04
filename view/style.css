@@ -88,7 +88,6 @@ p { margin: 0; }
 .coda-ios .bar button { padding: 0 12px; border-radius: var(--coda-radius, 10px); }
 .coda-ios .phead { padding: 4px 12px; gap: 4px; }
 .coda-ios .phead button { padding: 0 8px; }
-.coda-ios .code { font-size: .85em; }
 .coda-ios .menu button { padding: 0 12px; text-align: left; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */

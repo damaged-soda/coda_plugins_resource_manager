@@ -3,7 +3,7 @@ import { ErrorCode, RootState, Type } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
-export const MAX_LOADED = 100_000; // 单个目录已加载条数的上限，同服务端的条目上限
+export const MAX_LOADED = 100_000; // 读回保存的条数时认的上界（view 侧校验用），与服务端的条目上限各自独立
 const MAX_LOADED_DIRS = 500;
 const HIDDEN = new Set(['.git', '.DS_Store']);
 export const isHidden = name => HIDDEN.has(name);
