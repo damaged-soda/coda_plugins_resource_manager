@@ -2,7 +2,7 @@
 // 条目也可以直接写成 { name, kind, link }；list 可以按路径让它失败（host.failing）；记下 coda.open、coda.copy 的调用。
 import { loadApp } from './dom.mjs';
 
-export async function openTree(t, { platform = 'ios', listing = { '': ['a.txt', 'b.txt'] }, state } = {}) {
+export async function openTree(t, { platform = 'ios', listing = { '': ['a.txt', 'b.txt'] }, state, coda = {} } = {}) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sent = [], calls = { open: [], copy: [] };
   const host = { sent, calls, listing, failing: new Set(), generation: 0, openResult: undefined, lists: () => sent.filter(m => m.type === 'list') };
@@ -22,7 +22,8 @@ export async function openTree(t, { platform = 'ios', listing = { '': ['a.txt', 
     getState: () => state,
     setState: () => {},
     open: args => { calls.open.push(args); return host.openResult?.(); },
-    close: () => {},
+    close: () => { calls.close = (calls.close ?? 0) + 1; },
+    ...coda,
   });
   host.session = (id = 's1', path = '/A') => { host.generation++; page.post({ type: 'session', generation: host.generation, session: id }); page.post({ type: 'root', generation: host.generation, state: 'ready', path }); };
   host.changed = () => page.post({ type: 'changed', generation: host.generation });

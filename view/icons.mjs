@@ -13,6 +13,12 @@ const SHAPES = {
   other: { shapes: [['path', { d: 'M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z' }], ['path', { d: 'M14 3v5h5' }], ['path', { d: 'M9.5 14.5h5' }]] },
   chevron: { shapes: [['path', { d: 'm9 5 7 7-7 7' }]] },
   warning: { shapes: [['path', { d: 'M12 4 2.8 19.5h18.4L12 4z' }], ['path', { d: 'M12 10v4.5M12 17.2v.1' }]] },
+  back: { shapes: [['path', { d: 'm15 5-7 7 7 7' }]] },
+  check: { shapes: [['path', { d: 'm5 12.5 4.5 4.5L19 7.5' }]] },
+  ellipsis: { fill: true, shapes: [['circle', { cx: 5.5, cy: 12, r: 1.7 }], ['circle', { cx: 12, cy: 12, r: 1.7 }], ['circle', { cx: 18.5, cy: 12, r: 1.7 }]] },
+  refresh: { shapes: [['path', { d: 'M19 12a7 7 0 1 1-2.05-4.95' }], ['path', { d: 'M19 4.5v3.8h-3.8' }]] },
+  copy: { shapes: [['rect', { x: 8.5, y: 8.5, width: 11, height: 11, rx: 2.2 }], ['path', { d: 'M15.5 8.5V6.7a2.2 2.2 0 0 0-2.2-2.2H6.7a2.2 2.2 0 0 0-2.2 2.2v6.6a2.2 2.2 0 0 0 2.2 2.2h1.8' }]] },
+  window: { shapes: [['rect', { x: 3.5, y: 5, width: 17, height: 14, rx: 2.5 }], ['path', { d: 'M3.5 9.5h17' }]] },
   turn: { shapes: [['path', { d: 'M5 18v-4a4 4 0 0 1 4-4h10' }], ['path', { d: 'm15 6 4 4-4 4' }]] },
 };
 

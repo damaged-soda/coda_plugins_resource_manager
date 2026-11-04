@@ -1,11 +1,12 @@
 // 资源管理器的页面入口：消息收发、状态保留、工具栏。状态在 model.mjs，渲染在 tree.mjs 和 preview.mjs。
 import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
+import { icon } from './icons.mjs';
 import { Model, STATE_LIMIT, noticeText, parseState, putSession, trimState } from './model.mjs';
 import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
 import { RootState } from './protocol.mjs';
-import { mountTree } from './tree.mjs';
+import { mountTree, rootName } from './tree.mjs';
 
 const coda = window.coda;
 const $ = id => document.getElementById(id);
@@ -26,11 +27,11 @@ const tree = mountTree($('tree'), model, {
   toggle: path => model.toggle(path),
   more: path => model.loadMore(path),
   retry: path => model.retry(path),
-  menu: (event, path) => showMenu(event, path),
+  menu: (event, path) => pathMenu(event, path),
 }, { draggable: !isIOS, longPress: isIOS });
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
-  actions: isIOS ? [] : [{ label: '窗口', run: openInView }],
+  actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
 });
 
 // ---- 在独立视图里打开：iPhone 点文件，Mac 预览头部的「窗口」 ----
@@ -110,17 +111,30 @@ const toolbarItems = current => [
   { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
   { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
 ];
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新和显示隐藏文件在 ⋯ 的菜单里。
+const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
+const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
+// 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar(current) {
-  const items = toolbarItems(current), key = JSON.stringify(items);
+  const items = isIOS ? phoneItems() : toolbarItems(current), key = JSON.stringify(items);
   if (key === lastItems) return;
   lastItems = key;
   if (hasToolbar) return quiet(() => coda.toolbar(items));
-  paintBar($('bar'), isIOS ? [EXIT, ...items] : items, act);
+  hideMenu(); // 重画会换掉 ⋯ 按钮，开着的菜单认不得新按钮
+  paintBar($('bar'), items, act);
 }
 
-function act(id) {
+function act(id, button) {
   if (id === EXIT.id) quiet(() => coda.close());
+  else if (id === 'more') {
+    // 键盘激活没有 pointerdown，菜单外点击那条规则不管用：同一个按钮再次激活就关闭。
+    if (!menu.hidden && opener === button) hideMenu();
+    else openMenu(button, { items: [
+      { label: '刷新', run: () => act('refresh') },
+      { label: '显示隐藏文件', checked: model.showHidden, run: () => act('hidden') },
+    ] });
+  }
   else if (id === 'back') model.select(null);
   else if (id === 'hidden') { model.setShowHidden(!model.showHidden); persisted.hidden = model.showHidden; }
   else if (id === 'refresh') {
@@ -154,26 +168,47 @@ quiet(() => coda.on('visibility', visible => { if (!visible) saveNow(); }));
 $('tree').addEventListener('scroll', queueSave, { passive: true });
 preview.onScroll(queueSave);
 
-// ---- 复制路径的菜单：Mac 右键、iPhone 长按 ----
-// 菜单顶上写完整的相对路径：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全。
+// ---- 菜单：Mac 右键、iPhone 长按出复制路径，iPhone 的 ⋯ 出刷新和显示隐藏文件 ----
+// anchor：按钮元素（菜单贴在它下面、右对齐）或 { clientX, clientY } 的点。items：[{ label, run, checked? }]，
+// checked 不是 undefined 的是带对勾的开关项。title 写在菜单顶上：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全。
 // 位置按安全区夹住（横屏时客户端不替页面留）；offsetWidth 在显示后才量得到。
 const menu = $('menu');
-function showMenu(event, path) {
-  const entries = [['复制相对路径', path], ['复制绝对路径', `${model.root.path}/${path}`]];
-  const title = document.createElement('p');
-  title.className = 'menu-path secondary';
-  title.textContent = path;
-  menu.replaceChildren(title, ...entries.map(([label, text]) => {
-    const button = document.createElement('button');
-    button.textContent = label;
-    button.addEventListener('click', () => { coda.copy(text); hideMenu(); });
+let opener = null; // 打开菜单的按钮；用点打开的没有
+function openMenu(anchor, { title, items }) {
+  hideMenu();
+  const head = title === undefined ? [] : [Object.assign(document.createElement('p'), { className: 'menu-path secondary', textContent: title })];
+  const checkable = items.some(item => item.checked !== undefined); // 有开关项时，每一项都留出对勾的位置，文字才对齐
+  menu.replaceChildren(...head, ...items.map(({ label, run, checked }) => {
+    const button = document.createElement('button'), name = document.createElement('span');
+    name.textContent = label;
+    if (checkable) {
+      const mark = document.createElement('span');
+      mark.className = 'check';
+      if (checked) mark.append(icon('check', 16));
+      button.append(mark);
+    }
+    button.append(name);
+    button.setAttribute('role', checked === undefined ? 'menuitem' : 'menuitemcheckbox');
+    if (checked !== undefined) button.setAttribute('aria-checked', String(checked));
+    button.addEventListener('click', () => { run(); hideMenu(); });
     return button;
   }));
   menu.hidden = false;
-  menu.style.left = `max(var(--safe-left), min(${event.clientX}px, calc(100vw - var(--safe-right) - ${menu.offsetWidth + 4}px)))`;
-  menu.style.top = `max(var(--safe-top), min(${event.clientY}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
+  const box = anchor.getBoundingClientRect?.();
+  const x = box ? box.right - menu.offsetWidth : anchor.clientX, y = box ? box.bottom + 4 : anchor.clientY;
+  menu.style.left = `max(var(--safe-left), min(${x}px, calc(100vw - var(--safe-right) - ${menu.offsetWidth + 4}px)))`;
+  menu.style.top = `max(var(--safe-top), min(${y}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
+  if (box) { opener = anchor; opener.setAttribute('aria-expanded', 'true'); }
 }
-const hideMenu = () => { menu.hidden = true; };
+const pathMenu = (event, path) => openMenu(event, { title: path, items: [
+  { label: '复制相对路径', run: () => coda.copy(path) },
+  { label: '复制绝对路径', run: () => coda.copy(`${model.root.path}/${path}`) },
+] });
+function hideMenu() {
+  menu.hidden = true;
+  opener?.setAttribute('aria-expanded', 'false');
+  opener = null;
+}
 // 菜单开着时点菜单外：只关菜单，紧接着的那次点击不交给树。
 let menuDismissed = false;
 document.addEventListener('pointerdown', event => {

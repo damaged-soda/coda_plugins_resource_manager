@@ -59,7 +59,8 @@ const row = (page, name) => page.tree.find(node => node.classList.contains('row'
 const openFile = async (page, name = FILE) => { row(page, name).dispatch('click'); await flush(); };
 const text = page => page.preview.find(node => node.classList.contains('text'))[0]?.textContent;
 const meta = page => page.preview.find(node => node.classList.contains('pmeta'))[0];
-const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && node.textContent === label)[0];
+// 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
+const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent) === label)[0];
 
 async function previewing(t, options) {
   const ctx = await open(t, { roots: { '/A': tree('aaaaa'), '/B': tree('bbbbb') }, ...options });

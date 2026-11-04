@@ -75,7 +75,7 @@ export class Element extends Emitter {
     for (let at = this; at instanceof Element; at = at.parent) if (at.classList.contains(selector.slice(1))) return at;
     return null;
   }
-  getBoundingClientRect() { return { height: 24, width: 100 }; }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 100, bottom: 24, height: 24, width: 100 }; }
   dispatch(type, init = {}) {
     let stopped = false;
     const event = { type, target: this, preventDefault() {}, stopPropagation() { stopped = true; }, ...init };

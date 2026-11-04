@@ -1,5 +1,6 @@
 // 文件预览：只接收路径和读块的能力，不依赖树的状态。readFile 是纯逻辑；mountPreview 才碰 DOM。
-import { ContentKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
+import { icon, iconFor } from './icons.mjs';
+import { ContentKind, EntryKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
 
 function fromBase64(data) {
   const binary = atob(data), bytes = new Uint8Array(binary.length);
@@ -63,25 +64,30 @@ const h = (tag, attributes = {}, ...children) => {
 };
 
 // read(path, offset) → Promise<chunk 回答>，会话换了会以 stale 错误拒绝；copy(text) 复制路径。
-// actions：头部在「复制路径」旁额外加的按钮 [{ label, run(path) }]，预览不知道它们做什么。
-export function mountPreview(el, { read, copy, actions = [] }) {
-  const name = h('div', { class: 'pname truncate' }), meta = h('div', { class: 'pmeta caption secondary truncate' }, ' ');
-  const copyButton = h('button', { class: 'link', onclick: () => path !== null && copy(path) }, '复制路径');
+// actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path) }]，预览不知道它们做什么。
+// copyInHead：false 时头部不放「复制路径」（iPhone 放在底部工具条），由页面调 copyPath()。
+export function mountPreview(el, { read, copy, actions = [], copyInHead = true }) {
+  const name = h('div', { class: 'pname truncate' }), meta = h('div', { class: 'pmeta caption secondary truncate' }, ' ');
+  const fileIcon = h('span', { class: 'pico', 'aria-hidden': 'true' });
+  // 图标按钮：可访问名称和 Mac 的悬停提示都是 label；没有图标的退回文字。
+  const action = (label, glyph, run) => h('button', { class: glyph ? 'icon' : 'link', 'aria-label': label, title: label, onclick: run }, glyph ? icon(glyph, 18) : label);
+  const copyPath = () => path !== null && copy(path);
   const retryButton = h('button', { class: 'link', onclick: () => load(null, true), hidden: true }, '重试');
   const body = h('div', { class: 'pbody' });
-  const extra = actions.map(({ label, run }) => h('button', { class: 'link', onclick: () => path !== null && run(path) }, label));
-  el.replaceChildren(h('div', { class: 'phead' }, h('div', { class: 'grow' }, name, meta), retryButton, copyButton, ...extra), body);
+  const extra = actions.map(({ label, icon: glyph, run }) => action(label, glyph, () => path !== null && run(path)));
+  el.replaceChildren(h('div', { class: 'phead' }, fileIcon, h('div', { class: 'grow' }, name, meta), retryButton,
+    ...(copyInHead ? [action('复制路径', 'copy', copyPath)] : []), ...extra), body);
 
   let path = null, token = 0, shown = null, objectUrl = null; // shown：当前显示的 { size, mtimeMs }
-  let metaText = ' ', stale = null; // stale：后台刷新失败的原因，此时正文还是上次的
+  let metaText = ' ', metaTitle = '', stale = null; // stale：后台刷新失败的原因，此时正文还是上次的
   // 更新失败的提示占用元信息那一行，重试按钮在头部，所以正文不会被顶动。
   const paintMeta = () => {
     meta.textContent = stale ? `更新失败：${stale}` : metaText;
-    meta.title = stale ?? '';
+    meta.title = stale ?? metaTitle;
     meta.classList.toggle('warn', stale !== null);
     retryButton.hidden = stale === null;
   };
-  const setMeta = text => { metaText = text; stale = null; paintMeta(); };
+  const setMeta = (text, title = '') => { metaText = text; metaTitle = title; stale = null; paintMeta(); };
   const setStale = reason => { stale = reason; paintMeta(); };
   const revoke = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = null; };
   const notice = (title, detail, action) => body.replaceChildren(h('div', { class: 'empty' },
@@ -91,8 +97,11 @@ export function mountPreview(el, { read, copy, actions = [] }) {
   function show(result) {
     revoke();
     shown = { size: result.size, mtimeMs: result.mtimeMs };
+    // 元信息：目录 · 行数 · 大小；根目录下的文件没有目录，非文本没有行数。修改时间放进 title。
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const lines = result.kind === ContentKind.TEXT ? `${lineCount(result.text)} 行` : '';
     const note = result.truncated ? `只显示前 ${formatSize(TEXT_LIMIT)}` : '';
-    setMeta([formatSize(result.size), formatTime(result.mtimeMs), note].filter(Boolean).join(' · '));
+    setMeta([dir, lines, formatSize(result.size), note].filter(Boolean).join(' · '), `修改于 ${formatTime(result.mtimeMs)}`);
     if (result.kind === ContentKind.TEXT) {
       const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' }, Array.from({ length: lineCount(result.text) }, (_, i) => i + 1).join('\n'));
       body.replaceChildren(h('div', { class: 'code' }, gutter, h('pre', { class: 'text selectable' }, result.text)));
@@ -132,7 +141,15 @@ export function mountPreview(el, { read, copy, actions = [] }) {
   }
 
   return {
-    open(next, scroll = null) { path = next; name.textContent = next.split('/').pop(); name.title = next; return load(scroll, false); },
+    open(next, scroll = null) {
+      path = next;
+      const base = next.split('/').pop();
+      name.textContent = base;
+      name.title = next;
+      fileIcon.replaceChildren(icon(iconFor({ kind: EntryKind.FILE, name: base }), 22));
+      return load(scroll, false);
+    },
+    copyPath,
     refresh() { return path === null ? undefined : load(null, true); },
     // 内容的来源变了（根目录换了位置）：旧正文不能留，也不能按元数据判断「没变」。
     reload() { return path === null ? undefined : load(null, false); },

@@ -53,7 +53,8 @@ async function open(t, { args = { session: 's1', path: FILE }, roots = { '/A': t
 
 const text = page => page.preview.find(node => node.classList.contains('text'))[0]?.textContent;
 const body = page => page.preview.find(node => node.classList.contains('pbody'))[0];
-const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && node.textContent === label)[0];
+// 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
+const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent) === label)[0];
 
 async function started(t, options) {
   const ctx = await open(t, options);

@@ -42,7 +42,8 @@ async function open(t, { platform = 'ios', coda = {}, state } = {}) {
 
 const rows = page => page.tree.find(node => node.classList.contains('row'));
 const row = (page, name) => rows(page).find(node => node.textContent.includes(name));
-const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && node.textContent === label)[0];
+// 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
+const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent) === label)[0];
 
 test('iPhone：点文件调 coda.open，args 带会话和路径，树页不进预览模式，只高亮', async t => {
   const { page, host } = await open(t);
@@ -105,6 +106,12 @@ test('Mac：点文件仍进预览，头部「窗口」按钮用同样的 args �
   await flush();
   assert.ok(visible(page.preview));
   assert.equal(host.calls.open.length, 0, '点文件本身不开窗口');
+  for (const label of ['窗口', '复制路径']) {
+    const icon = button(page.preview, label);
+    assert.equal(icon.getAttribute('aria-label'), label);
+    assert.equal(icon.title, label, 'Mac 悬停有提示');
+    assert.equal(icon.textContent, '', '只有图标，没有文字');
+  }
   button(page.preview, '窗口').dispatch('click');
   await flush();
   assert.deepEqual(host.calls.open, [{ view: 'file', args: { session: 's1', path: 'f1.txt' } }]);
@@ -120,6 +127,7 @@ test('iPhone 的预览头部没有「窗口」；行不设 draggable，Mac 设',
   ios.host.session();
   await flush();
   assert.equal(button(ios.page.preview, '窗口'), undefined);
+  assert.equal(button(ios.page.preview, '复制路径'), undefined, 'iPhone 的复制路径在底部工具条');
   assert.ok(rows(ios.page).filter(node => node.classList.contains('entry')).every(node => !node.draggable));
   const mac = await open(t, { platform: 'mac' });
   mac.host.session();

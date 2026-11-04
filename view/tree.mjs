@@ -34,6 +34,9 @@ export function visibleRows(model) {
   return rows;
 }
 
+// 根目录的名字：路径的最后一段，分区标题和 iPhone 的页内工具条共用。
+export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
+
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
 // handlers: { open(path), toggle(path), more(path), retry(path), menu(event, path, kind) }
@@ -59,8 +62,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
 
   // 分区标题：根目录的名字（root.path 的最后一段），不是 ready 时不显示。iPhone 上由 CSS 隐藏。
   const paintTitle = () => {
-    const path = model.ready ? model.root.path : '';
-    const text = path.split('/').filter(Boolean).pop() ?? path;
+    const text = model.ready ? rootName(model.root.path) : '';
     if (title.textContent !== text) title.textContent = text;
     title.hidden = text === '';
   };

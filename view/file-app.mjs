@@ -11,6 +11,7 @@ const coda = window.coda;
 const $ = id => document.getElementById(id);
 const quiet = fn => { try { return fn(); } catch { return undefined; } };
 const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac';
+const isIOS = coda.platform === 'ios'; // iPhone：复制路径在底部工具条，不在预览头部
 
 // 参数里的会话和路径，形状不对按没有处理。
 const argsOf = args => ({
@@ -28,7 +29,7 @@ let root = null;
 let restore = parseScroll(quiet(() => coda.getState()));
 
 const conn = connect(coda, { handlers: { session: onSession, root: onRoot, changed: onChanged }, onStatus: () => schedule() });
-const preview = mountPreview($('preview'), { read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text) });
+const preview = mountPreview($('preview'), { read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text), copyInHead: !isIOS });
 
 // 模块跟随的会话和启动参数里的不是同一个时（换会话的两条消息没有先后保证），不能读，等对上。
 const ready = () => want.path !== null && session === want.session && root?.state === RootState.READY;
@@ -76,7 +77,7 @@ function paintNotice() {
       : noticeText(session === want.session ? root : null, session);
   if (key === noticeKey) return;
   noticeKey = key;
-  showNotice($('notice'), failed && want.path !== null ? { failure: conn.failure, retry: conn.hello } : { text: key });
+  showNotice($('notice'), failed && want.path !== null ? { failure: conn.failure, retry: conn.hello } : { text: key, glyph: 'doc' });
 }
 
 // ---- 模块的消息（代次和握手由 connection 处理）----
@@ -109,15 +110,17 @@ quiet(() => coda.on('context', ({ args }) => {
   schedule();
 }));
 
-// ---- 工具条：Mac 用 coda.toolbar，没有的（iOS）退成页内一条 ----
+// ---- 工具条：Mac 用 coda.toolbar；iPhone 在底部放返回（仅横屏）、刷新、复制路径；其他（harness）退成页内一条 ----
 const refresh = () => { conn.refresh(); preview.refresh(); };
+// 说明区下预览是关着的，复制的是启动值里的路径：模块不可用时也能把路径交给对话。
+const copyPath = () => (preview.path !== null ? preview.copyPath() : want.path !== null && coda.copy(want.path));
 const items = [{ id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' }];
 if (hasToolbar) {
   quiet(() => coda.toolbar(items));
   quiet(() => coda.on('toolbar', ({ id }) => { if (id === 'refresh') refresh(); }));
 } else {
-  const exit = coda.platform === 'ios';
-  paintBar($('bar'), exit ? [EXIT, ...items] : items, id => (id === EXIT.id ? quiet(() => coda.close()) : refresh()));
+  const shown = isIOS ? [EXIT, { ...items[0], glyph: 'refresh' }, { id: 'copy', label: '复制路径', kind: 'button', glyph: 'copy' }] : items;
+  paintBar($('bar'), shown, id => (id === EXIT.id ? quiet(() => coda.close()) : id === 'copy' ? copyPath() : refresh()));
 }
 
 // ---- 阅读位置：setState 按视图和 args 隔离，每个文件自然分开 ----

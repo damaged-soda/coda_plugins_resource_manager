@@ -30,10 +30,16 @@ p { margin: 0; }
 .pane { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: var(--safe-bottom); }
 .pane.off { visibility: hidden; pointer-events: none; }
 .empty { display: grid; align-content: start; justify-items: center; gap: 6px; padding: 32px 20px; text-align: center; }
+.notice-icon { display: grid; place-items: center; margin-bottom: 6px; color: var(--coda-secondary, #6e6e73); }
+.notice-icon svg { display: block; }
 
-.bar { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-.bar button { padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
+/* 页内工具条：iPhone 树页在顶部（返回、根目录名、⋯），文件页在底部（.bottom：返回、刷新、复制路径）。没有 coda.toolbar 的其他平台（harness）是一条文字按钮。 */
+.bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.bar button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
 .bar button.on { color: var(--coda-accent, #0a84ff); }
+.bar svg { display: block; flex: none; }
+.bar-title { padding: 0 8px; font-weight: 600; }
+.bar.bottom { padding-bottom: var(--safe-bottom); border-top: 1px solid var(--line); border-bottom: 0; } /* 操作区 44 点（iPhone）之外只加安全区 */
 
 /* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。
    Mac 是侧栏列表：左右缩进 8 点，行有圆角，选中用 --coda-selection。 */
@@ -61,9 +67,13 @@ p { margin: 0; }
 .tail.warn { color: var(--coda-orange, #b25000); }
 
 /* 预览：头部永远占一行名字加一行说明，加载和失败只换下面的内容。 */
-.preview { display: flex; flex-direction: column; overflow: hidden; }
+.preview { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; } /* 底部的安全区归文件页的工具条 */
 .phead button { flex: none; white-space: nowrap; }
 .phead { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.pico { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
+.pico svg { display: block; }
+button.icon { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
+button.icon svg { display: block; }
 .pname { font-weight: 600; }
 .pbody { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .code { display: flex; width: max-content; min-width: 100%; font: .9em/1.55 var(--coda-mono, ui-monospace, Menlo, monospace); }
@@ -77,7 +87,9 @@ p { margin: 0; }
 #notice:focus { outline: none; }
 .menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff)); }
-.menu button { display: block; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
+.menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
+.check { flex: none; display: grid; place-items: center; width: 16px; color: var(--coda-accent, #0a84ff); }
+.check svg { display: block; }
 .menu-path { max-width: 280px; padding: 4px 10px 6px; overflow-wrap: anywhere; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
@@ -87,7 +99,7 @@ p { margin: 0; }
 
 /* 悬停只在有鼠标时：触摸后不会留着。 */
 @media (hover: hover) {
-  .bar button:hover { background: var(--hover); }
+  .bar button:hover, button.icon:hover { background: var(--hover); }
   .row.entry:hover { background: var(--hover); }
   .row.entry.sel:hover { background: var(--coda-selection, var(--hover)); }
   .menu button:hover { background: var(--coda-selection, var(--hover)); }
@@ -111,13 +123,17 @@ p { margin: 0; }
 .coda-ios .row.dir .chev { color: var(--coda-accent, #0a84ff); }
 .coda-ios .row.file .chev svg { visibility: visible; }
 .coda-ios .row.dead .chev { display: none; }
-.coda-ios .bar { gap: 8px; padding: 4px 8px; }
 .coda-ios button { min-height: 44px; min-width: 44px; }
-.coda-ios .bar button { padding: 0 12px; border-radius: var(--coda-radius, 10px); }
+.coda-ios .bar { gap: 0; padding: 0 8px; }
+.coda-ios .bar button { gap: 6px; padding: 0 12px; border-radius: var(--coda-radius, 10px); color: var(--coda-accent, #0a84ff); }
+.coda-ios .bar button.icon { padding: 0; justify-content: center; }
+.coda-ios .bar.bottom { padding: 0 8px var(--safe-bottom); }
+.coda-ios .bar.bottom button { flex: 1 1 0; justify-content: center; } /* 横排单行：横屏只有 390 点高 */
 .coda-ios .phead { padding: 4px 12px; gap: 4px; }
 .coda-ios .phead button { padding: 0 8px; }
-.coda-ios .menu button { padding: 0 12px; text-align: left; }
+.coda-ios .code { font-size: .8em; } /* 窄屏多看些：17 点下约 13.6 点 */
+.coda-ios .menu button { padding: 0 12px; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
-.exit { display: none; }
-@media (orientation: landscape) and (max-height: 500px) { .coda-ios .exit { display: inline-flex; align-items: center; } }
+.bar .exit { display: none; }
+@media (orientation: landscape) and (max-height: 500px) { .coda-ios .bar .exit { display: inline-flex; } }
