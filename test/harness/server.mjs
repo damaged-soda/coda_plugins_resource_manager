@@ -3,6 +3,7 @@
 // 平台与安全区：?platform=ios 时 <html> 带 coda-ios、字号 17px；?safe=上,右,下,左 模拟 env(safe-area-inset-*)（点数，如 0,59,21,59）。
 // 单独打开页面地址（/view/index.html?platform=ios）时，coda.open 跳到文件页、coda.close 返回，可直接用手机尺寸截图。
 // 文件视图：地址后加 ?view=file&session=A&path=相对路径，页面启动值同 coda.open({ view: 'file', args })。
+// 主题消息 { harness: 'theme', kind, fontSize? }：fontSize 缺省用平台默认值，页面底色随 --coda-background。
 // 控制页可切深浅色、切会话、触发一轮结束、重新载入页面。不是产品代码，不随插件使用。
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -46,8 +47,9 @@ const THEMES = {
 const shim = `
 const THEMES = ${JSON.stringify(THEMES)}, listeners = {};
 const query = new URLSearchParams(location.search), isIOS = query.get('platform') === 'ios';
-const applyTheme = kind => { const root = document.documentElement; root.className = (isIOS ? 'coda-ios' : 'coda-mac') + ' coda-' + kind;
-  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', isIOS ? '17px' : '13px');
+const applyTheme = (kind, fontSize) => { const root = document.documentElement; root.className = (isIOS ? 'coda-ios' : 'coda-mac') + ' coda-' + kind;
+  for (const [k, v] of Object.entries(THEMES[kind])) root.style.setProperty(k, v); root.style.setProperty('--coda-font-size', fontSize || (isIOS ? '17px' : '13px'));
+  root.style.background = 'var(--coda-background)'; // 真实客户端也把这个底色垫在透明页面后面
   const safe = (query.get('safe') || '').split(',');
   ['top', 'right', 'bottom', 'left'].forEach((side, i) => { if (safe[i]) root.style.setProperty('--safe-' + side, safe[i] + 'px'); });
   root.style.setProperty('--coda-mono', 'ui-monospace, Menlo, monospace'); (listeners.theme || []).forEach(f => f({ kind })); };
@@ -69,7 +71,7 @@ const connection = Math.random().toString(36).slice(2);
 const events = new EventSource('/events?id=' + connection + '&view=' + (isFile ? 'file' : 'files') + '&args=' + encodeURIComponent(JSON.stringify(startArgs))), opened = new Promise(resolve => events.addEventListener('open', resolve));
 const loaded = new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve));
 applyTheme(new URLSearchParams(location.search).get('theme') || 'light');
-addEventListener('message', event => { if (event.data?.harness === 'toolbar') fire('toolbar', { id: event.data.id }); if (event.data?.harness === 'theme') applyTheme(event.data.kind); });
+addEventListener('message', event => { if (event.data?.harness === 'toolbar') fire('toolbar', { id: event.data.id }); if (event.data?.harness === 'theme') applyTheme(event.data.kind, event.data.fontSize); });
 addEventListener('pagehide', () => fire('visibility', false));
 events.addEventListener('msg', event => loaded.then(() => window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(event.data) }))));`;
 

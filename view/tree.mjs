@@ -1,5 +1,6 @@
 // 目录树：visibleRows 把模型压成扁平行（纯逻辑）；mountTree 只画可见的那一段，上万条也不卡。
 import { EntryKind } from './protocol.mjs';
+import { icon, iconFor } from './icons.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
 const OVERSCAN = 8;
@@ -33,30 +34,44 @@ export function visibleRows(model) {
   return rows;
 }
 
+// 根目录的名字：路径的最后一段，分区标题和 iPhone 的页内工具条共用。
+export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
+
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
 // handlers: { open(path), toggle(path), more(path), retry(path), menu(event, path, kind) }
 // draggable：触屏上拖行没有用处，还会抢滚动，关掉。
 // longPress：触屏上按住一行打开 handlers.menu（Mac 用右键）。不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
 export function mountTree(el, model, handlers, { draggable = true, longPress = false } = {}) {
-  const spacer = document.createElement('div'), win = document.createElement('div');
-  spacer.className = 'spacer'; win.className = 'win';
+  const title = document.createElement('div'), spacer = document.createElement('div'), win = document.createElement('div');
+  title.className = 'section truncate'; spacer.className = 'spacer'; win.className = 'win';
+  title.hidden = true;
   spacer.append(win);
-  el.replaceChildren(spacer);
+  el.replaceChildren(title, spacer);
   let rows = [], rowH = 24;
 
+  // 探针放在 spacer 里：量到的是行在真实结构里的高度。
   const measure = () => {
     const probe = document.createElement('div');
     probe.className = 'row';
     probe.style.visibility = 'hidden';
-    el.append(probe);
+    spacer.append(probe);
     rowH = probe.getBoundingClientRect().height || rowH;
     probe.remove();
   };
 
+  // 分区标题：根目录的名字（root.path 的最后一段），不是 ready 时不显示。iPhone 上由 CSS 隐藏。
+  const paintTitle = () => {
+    const text = model.ready ? rootName(model.root.path) : '';
+    if (title.textContent !== text) title.textContent = text;
+    title.hidden = text === '';
+  };
+
+  // 标题在滚动容器里，把 spacer 推下去 offsetTop：行的位置按 spacer 内部算，滚动值（保存和恢复的）仍是容器的。
   function paint() {
-    const first = Math.max(0, Math.floor(el.scrollTop / rowH) - OVERSCAN);
-    const last = Math.min(rows.length, Math.ceil((el.scrollTop + el.clientHeight) / rowH) + OVERSCAN);
+    const top = el.scrollTop - (spacer.offsetTop || 0);
+    const first = Math.max(0, Math.floor(top / rowH) - OVERSCAN);
+    const last = Math.min(rows.length, Math.ceil((top + el.clientHeight) / rowH) + OVERSCAN);
     win.style.transform = `translateY(${first * rowH}px)`;
     win.replaceChildren(...rows.slice(first, last).map((row, i) => rowNode(row, first + i)));
   }
@@ -65,7 +80,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     const node = document.createElement('div');
     node.className = `row ${row.type}`;
     node.dataset.i = index;
-    node.style.paddingLeft = `calc(var(--indent) * ${row.depth} + var(--pad))`;
+    node.style.cssText = `--d: ${row.depth}`; // 缩进由 CSS 按 --d 算，分隔线的起点也用它
     if (row.type !== 'entry') {
       node.textContent = row.text;
       if (row.retry) { node.classList.add('retry'); node.title = row.text; } // 长原因在行里被截断，Mac 悬停看全
@@ -77,15 +92,21 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     if (row.path === model.selected) node.classList.add('sel');
     if (row.kind === EntryKind.DIR) node.setAttribute('aria-expanded', row.open);
     if (!dead && draggable) node.draggable = true;
-    const chevron = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
+    // 一份 DOM：Mac 是 箭头、图标、名字、尾标，iPhone 的箭头用 CSS order 排到最后。
+    const chevron = document.createElement('span'), glyph = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
     chevron.className = 'chev';
-    chevron.textContent = row.kind === EntryKind.DIR ? (row.busy ? '…' : row.open ? '▾' : '▸') : '';
+    if (row.busy) chevron.textContent = '…';
+    else if (!dead) chevron.append(icon('chevron', 12)); // 文件的箭头 Mac 上由 CSS 藏起来，只占位
+    if (row.open) node.classList.add('open');
+    glyph.className = 'ico';
+    glyph.append(icon(iconFor(row)));
     label.className = 'name truncate';
     label.textContent = row.name;
     tail.className = row.failed ? 'tail warn' : 'tail';
-    tail.textContent = row.failed ? '!' : row.link ? '↪' : '';
+    if (row.failed) tail.append(icon('warning', 14));
+    else if (row.link) tail.append(icon('turn', 14));
     node.title = row.failed ? `${row.path}\n读取失败：${row.failed}` : TITLES[row.kind] ? `${row.path}\n${TITLES[row.kind]}` : row.path;
-    node.append(chevron, label, tail);
+    node.append(chevron, glyph, label, tail);
     return node;
   }
 
@@ -138,7 +159,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
   new ResizeObserver(paint).observe(el);
 
   return {
-    render() { rows = visibleRows(model); spacer.style.height = `${rows.length * rowH}px`; paint(); },
+    render() { rows = visibleRows(model); spacer.style.height = `${rows.length * rowH}px`; paintTitle(); paint(); },
     remeasure() { measure(); this.render(); },
     scroll: () => el.scrollTop,
     scrollTo(top) { el.scrollTop = top; },

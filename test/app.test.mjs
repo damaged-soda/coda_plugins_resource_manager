@@ -32,7 +32,10 @@ async function open(t, { roots = {}, coda = {}, timers = true } = {}) {
     const files = host.roots[host.root?.path] ?? {};
     const base = { generation: request.generation, requestId: request.requestId };
     if (request.type === 'list') {
-      const entries = Object.keys(files).map(name => ({ name, kind: 'file' }));
+      // 文件名里带 / 的在子目录里：列出 request.path 这一层的文件和目录。
+      const dir = request.path ? `${request.path}/` : '', kinds = new Map();
+      for (const name of Object.keys(files)) if (name.startsWith(dir)) { const [head, rest] = name.slice(dir.length).split('/'); kinds.set(head, rest === undefined ? 'file' : 'dir'); }
+      const entries = [...kinds].map(([name, kind]) => ({ name, kind }));
       return page.post({ type: 'listed', ...base, entries, nextCursor: null });
     }
     if (host.hold) return held.push(request);
@@ -59,7 +62,8 @@ const row = (page, name) => page.tree.find(node => node.classList.contains('row'
 const openFile = async (page, name = FILE) => { row(page, name).dispatch('click'); await flush(); };
 const text = page => page.preview.find(node => node.classList.contains('text'))[0]?.textContent;
 const meta = page => page.preview.find(node => node.classList.contains('pmeta'))[0];
-const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && node.textContent === label)[0];
+// 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
+const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent) === label)[0];
 
 async function previewing(t, options) {
   const ctx = await open(t, { roots: { '/A': tree('aaaaa'), '/B': tree('bbbbb') }, ...options });
@@ -148,7 +152,7 @@ test('setState 抛错：界面不受影响，下一次保存照常进行', async
   assert.equal(fail, 0);
   assert.equal(text(page), 'aaaaa');
   assert.equal(saved.length, 0);
-  button(page.bar, '返回').dispatch('click'); // 再有一次变化，保存重试
+  button(page.preview, '返回').dispatch('click'); // 再有一次变化，保存重试
   await flush();
   tick(300);
   assert.equal(saved.at(-1).sessions.s1.selected, null);
@@ -289,4 +293,90 @@ test('说明区重画后焦点不丢到页面外：重试按钮聚焦时点它�
   tick(30_000);
   await flush();
   assert.equal(document.activeElement, button(page.notice, '重试'), '再次失败，焦点落在新的重试按钮上');
+});
+
+test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录树：滚动位置在，选中清掉，焦点落在目录树', async t => {
+  const { page } = await previewing(t);
+  const head = page.preview.find(node => node.classList.contains('phead'))[0];
+  const back = button(page.preview, '返回');
+  assert.equal(head.children[0], back, '在最左边');
+  assert.equal(back.title, '返回');
+  assert.ok(back.classList.contains('icon'), '和头部其他图标按钮一样');
+  assert.equal(back.textContent, '');
+  page.tree.scrollTop = 321;
+  back.focus();
+  back.dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true);
+  assert.equal(page.preview.inert, true);
+  assert.equal(page.tree.scrollTop, 321);
+  assert.equal(page.tree.inert, false);
+  assert.equal(globalThis.document.activeElement, page.tree, '焦点不丢到页面外');
+});
+
+test('Mac 点返回时按钮没拿到焦点（Safari 点按钮不聚焦）：页面持有焦点，照样交给目录树', async t => {
+  const { page } = await previewing(t);
+  globalThis.document.activeElement = null;
+  button(page.preview, '返回').dispatch('click');
+  await flush();
+  assert.equal(globalThis.document.activeElement, page.tree);
+});
+
+test('Mac 点返回但页面没有焦点（document.hasFocus() 为假）：不动目录树的焦点', async t => {
+  const { page } = await previewing(t);
+  const back = button(page.preview, '返回');
+  back.focus();
+  globalThis.document.windowBlurred = true;
+  let focused = 0;
+  page.tree.focus = () => { focused++; };
+  back.dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true, '照样回到目录树');
+  assert.equal(focused, 0);
+});
+
+for (const blurred of [true, false]) test(`不是点返回造成的切回目录树（切会话、root 变化、后台刷新）：不动焦点（页面失焦：${blurred}）`, async t => {
+  {
+    const { page, host } = await previewing(t);
+    globalThis.document.windowBlurred = blurred;
+    let focused = 0;
+    page.tree.focus = () => { focused++; };
+    globalThis.document.activeElement = button(page.preview, '返回'); // 焦点仍在预览里
+    host.session('s2', { state: 'ready', path: '/B' });
+    await flush();
+    assert.equal(visible(page.preview), false, '切会话后预览已关');
+    assert.equal(focused, 0, `切会话 blurred=${blurred}`);
+    await openFile(page);
+    globalThis.document.activeElement = button(page.preview, '返回');
+    host.setRoot('gone');
+    await flush();
+    host.setRoot('ready');
+    host.changed();
+    await flush();
+    assert.equal(focused, 0, `root 变化 blurred=${blurred}`);
+  }
+});
+
+test('Mac 返回后展开的目录、它的子项和滚动位置都在：先展开、滚动、打开文件、再返回', async t => {
+  const { page, host } = await open(t, { roots: { '/A': { 'dir/inner.txt': { text: 'i' }, [FILE]: { text: 'aaaaa' } } } });
+  host.session('s1');
+  await flush();
+  row(page, 'dir').dispatch('click');
+  await flush();
+  assert.ok(row(page, 'inner.txt'), '展开后子项出现');
+  page.tree.scrollTop = 10; // 假 DOM 不量高：滚得太远目录行会掉出窗口，取不到一行高的非零值
+  await openFile(page);
+  assert.equal(visible(page.preview), true);
+  button(page.preview, '返回').dispatch('click');
+  await flush();
+  assert.equal(visible(page.tree), true);
+  assert.equal(row(page, 'dir').getAttribute('aria-expanded'), 'true', '目录仍是展开的');
+  assert.ok(row(page, 'inner.txt'), '子项还在');
+  assert.equal(page.tree.scrollTop, 10, '滚动位置保留');
+});
+
+test('iPhone 点文件不进预览，预览头部没有「返回」', async t => {
+  const { page } = await open(t, { roots: { '/A': tree('aaaaa') }, coda: { platform: 'ios' } });
+  await Promise.resolve();
+  assert.equal(button(page.preview, '返回'), undefined);
 });
