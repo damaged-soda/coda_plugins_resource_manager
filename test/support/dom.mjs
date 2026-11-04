@@ -94,10 +94,10 @@ export function visible(node) {
 
 // 装上 window、document 等全局并加载真实的页面入口（默认 view/app.mjs），每次得到全新的模块实例。
 let instance = 0;
-export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu'] } = {}) {
+export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu', 'hint'] } = {}) {
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   elements.bar.hidden = true;
-  if (elements.menu) elements.menu.hidden = true;
+  for (const id of ['menu', 'hint']) if (elements[id]) elements[id].hidden = true;
   const windowEmitter = new Emitter(), documentEmitter = new Emitter();
   const dom = {
     window: Object.assign(windowEmitter, { coda }),

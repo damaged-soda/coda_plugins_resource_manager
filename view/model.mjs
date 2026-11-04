@@ -3,6 +3,8 @@ import { ErrorCode, RootState, Type } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
+export const MAX_LOADED = 100_000; // 单个目录已加载条数的上限，同服务端的条目上限
+const MAX_LOADED_DIRS = 500;
 const HIDDEN = new Set(['.git', '.DS_Store']);
 export const isHidden = name => HIDDEN.has(name);
 export const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
@@ -31,6 +33,7 @@ export class Model {
   root = null; // 收到 root 之前是 null
   dirs = new Map(); // path → { entries, next, loaded, loading, error, token }
   expanded = new Set(); // 不变量：展开的目录，它的每一级上层也展开
+  wanted = new Map(); // 恢复状态时各目录要取够的条数，第一次取用后删掉
   selected = null;
   showHidden = false;
 
@@ -54,6 +57,7 @@ export class Model {
     this.session = session ?? null;
     this.root = null;
     this.dirs = new Map();
+    this.wanted = new Map(Object.entries(saved?.loaded ?? {}));
     const paths = (saved?.expanded ?? []).filter(path => path !== '');
     this.expanded = new Set(paths.filter(path => !path.includes('/') || paths.includes(path.slice(0, path.lastIndexOf('/')))));
     this.selected = saved?.selected ?? null;
@@ -83,22 +87,24 @@ export class Model {
   async #reload(path, generation) {
     if (this.link.generation !== generation) return; // 排队时会话已换，旧任务不碰新会话
     let dir = this.dirs.get(path);
-    if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0 });
-    const token = ++dir.token, want = dir.entries.length;
+    if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0, pages: 0 });
+    const token = ++dir.token, want = Math.max(dir.entries.length, this.wanted.get(path) ?? 0);
+    this.wanted.delete(path);
     dir.loading = true;
     this.onChange();
     const current = () => this.link.generation === generation && this.dirs.get(path) === dir && dir.token === token;
     try {
       const entries = [];
-      let next = null;
+      let next = null, pages = 0;
       do {
         const reply = await this.link.call('list', { path, cursor: next });
         if (this.link.generation !== generation) return; // 回答到了、继续前会话换了，不再取下一页
         entries.push(...reply.entries);
         next = reply.nextCursor ?? null;
+        pages++;
       } while (next && entries.length < want);
       if (!current()) return;
-      Object.assign(dir, { entries, next, loaded: true, error: null });
+      Object.assign(dir, { entries, next, loaded: true, error: null, pages });
     } catch (error) {
       if (error.stale || !current()) return;
       if (error.code === ErrorCode.NOT_FOUND && path !== '') this.#drop(path);
@@ -139,7 +145,7 @@ export class Model {
       const reply = await this.link.call('list', { path, cursor: dir.next });
       if (!current()) return;
       dir.entries = dir.entries.concat(reply.entries);
-      Object.assign(dir, { next: reply.nextCursor ?? null, error: null });
+      Object.assign(dir, { next: reply.nextCursor ?? null, error: null, pages: dir.pages + 1 });
     } catch (error) {
       if (!error.stale && current()) dir.error = { code: error.code, message: error.message };
     } finally {
@@ -150,7 +156,12 @@ export class Model {
 
   select(path) { this.selected = path; this.onChange(); }
   setShowHidden(on) { this.showHidden = on; this.onChange(); }
-  snapshot() { return { expanded: [...this.expanded], selected: this.selected }; }
+  // loaded：取过不止一页的目录已加载的条数，只存条数不存内容；第一页每次都会重新取，不用存。
+  snapshot() {
+    const loaded = {};
+    for (const [path, dir] of this.dirs) if (dir.pages > 1 && dir.entries.length > 0) loaded[path] = dir.entries.length;
+    return { expanded: [...this.expanded], selected: this.selected, loaded };
+  }
 }
 
 // ---- 状态保留：setState 没有会话维度，内部按会话分开 ----
@@ -158,6 +169,9 @@ export class Model {
 export const byteSize = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const depth = path => path.split('/').length;
 const strings = (value, max) => (Array.isArray(value) ? value.filter(s => typeof s === 'string' && s.length <= 1024).slice(0, max) : []);
+
+const parseLoaded = raw => Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {})
+  .filter(([path, count]) => path.length <= 1024 && Number.isSafeInteger(count) && count > 0 && count <= MAX_LOADED).slice(0, MAX_LOADED_DIRS));
 
 // 读回来的值可能是别的版本或坏的，只认自己的形状。
 export function parseState(raw) {
@@ -173,6 +187,8 @@ export function parseState(raw) {
       selected: typeof item.selected === 'string' && item.selected.length <= 1024 ? item.selected : null,
       scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left) },
     };
+    const loaded = parseLoaded(item.loaded);
+    if (Object.keys(loaded).length > 0) state.sessions[id].loaded = loaded;
   }
   return state;
 }
@@ -188,8 +204,11 @@ export function trimState(state, keep, limit = STATE_LIMIT) {
   const fits = () => byteSize(next) <= limit;
   const others = Object.keys(next.sessions).filter(id => id !== keep).sort((a, b) => next.sessions[a].at - next.sessions[b].at);
   for (const id of others) { if (fits()) return next; delete next.sessions[id]; }
-  const current = next.sessions[keep];
+  let current = next.sessions[keep];
   if (fits() || !current) return fits() ? next : { ...next, sessions: {} };
+  // 条数只影响返回后的滚动落点，比展开状态先舍。
+  current = next.sessions[keep] = { ...current, loaded: {} };
+  if (fits()) return next;
   // 按层级从浅到深排，取最长的、放得下的前缀；前缀仍然满足「上层也展开」。
   const sorted = [...current.expanded].sort((a, b) => depth(a) - depth(b));
   let low = 0, high = sorted.length;

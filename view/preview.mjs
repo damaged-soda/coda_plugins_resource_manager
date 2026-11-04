@@ -63,12 +63,14 @@ const h = (tag, attributes = {}, ...children) => {
 };
 
 // read(path, offset) → Promise<chunk 回答>，会话换了会以 stale 错误拒绝；copy(text) 复制路径。
-export function mountPreview(el, { read, copy }) {
+// actions：头部在「复制路径」旁额外加的按钮 [{ label, run(path) }]，预览不知道它们做什么。
+export function mountPreview(el, { read, copy, actions = [] }) {
   const name = h('div', { class: 'pname truncate' }), meta = h('div', { class: 'pmeta caption secondary truncate' }, ' ');
   const copyButton = h('button', { class: 'link', onclick: () => path !== null && copy(path) }, '复制路径');
   const retryButton = h('button', { class: 'link', onclick: () => load(null, true), hidden: true }, '重试');
   const body = h('div', { class: 'pbody' });
-  el.replaceChildren(h('div', { class: 'phead' }, h('div', { class: 'grow' }, name, meta), retryButton, copyButton), body);
+  const extra = actions.map(({ label, run }) => h('button', { class: 'link', onclick: () => path !== null && run(path) }, label));
+  el.replaceChildren(h('div', { class: 'phead' }, h('div', { class: 'grow' }, name, meta), retryButton, copyButton, ...extra), body);
 
   let path = null, token = 0, shown = null, objectUrl = null; // shown：当前显示的 { size, mtimeMs }
   let metaText = ' ', stale = null; // stale：后台刷新失败的原因，此时正文还是上次的

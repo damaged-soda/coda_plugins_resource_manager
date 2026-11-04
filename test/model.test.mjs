@@ -378,3 +378,58 @@ test('parseState：坏的、别的版本的值回到空状态，只认自己的�
   assert.equal(parsed.hidden, true);
   assert.deepEqual(parsed.sessions, { A: { at: 2, expanded: ['a', 'b'], selected: null, scroll: { tree: 0, top: 4, left: 0 } } });
 });
+
+// ---- 返回后恢复：已加载的条数 ----
+
+test('已加载条数：只记取过不止一页的目录；恢复时取够再落地，用过即删', async () => {
+  const t = manual();
+  t.session(1, 'A');
+  t.root(1);
+  t.reply((await t.lists(''))[0], { ...entries(['src/', 'a.txt']), nextCursor: 'c1' });
+  await flush();
+  assert.deepEqual(t.model.snapshot().loaded, {}, '只有一页的目录不存');
+  t.model.loadMore('');
+  const more = (await t.lists('')).at(-1);
+  assert.equal(more.cursor, 'c1');
+  t.reply(more, entries(['b.txt', 'c.txt']));
+  await flush();
+  assert.deepEqual(t.model.snapshot().loaded, { '': 4 });
+
+  // 页面重新打开：只取第一页的话会少，所以按保存的条数取到够为止。
+  const next = manual();
+  next.session(1, 'A', { expanded: [], loaded: { '': 4 } });
+  next.root(1);
+  const [first] = await next.lists('');
+  next.reply(first, { ...entries(['src/', 'a.txt']), nextCursor: 'c1' });
+  const second = (await next.lists('')).at(-1);
+  assert.equal(second.cursor, 'c1', '条数还不够，接着取下一页');
+  next.reply(second, entries(['b.txt', 'c.txt']));
+  await flush();
+  assert.equal(names(next.model).length, 4);
+  assert.equal(next.model.wanted.has(''), false);
+  assert.equal(next.model.dirs.get('').pages, 2);
+});
+
+test('已加载条数：条目变少时按实际取到的为止，不循环', async () => {
+  const t = manual();
+  t.session(1, 'A', { expanded: [], loaded: { '': 50 } });
+  t.root(1);
+  t.reply((await t.lists(''))[0], entries(['only.txt']));
+  await flush();
+  assert.deepEqual(names(t.model), ['only.txt']);
+  assert.equal((await t.lists('')).length, 1);
+});
+
+test('状态裁剪：条数算进总量，先于展开目录被舍；超限不抛；parseState 只认合法值', () => {
+  const state = parseState(null);
+  const loaded = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`d${i}`, 5000]));
+  putSession(state, 's', { expanded: ['a', 'a/b'], selected: null, loaded, scroll: { tree: 0, top: 0, left: 0 } });
+  const full = byteSize(state);
+  const out = trimState(state, 's', full - 1);
+  assert.ok(byteSize(out) <= full - 1);
+  assert.deepEqual(out.sessions.s.expanded, ['a', 'a/b'], '展开状态还在');
+  assert.deepEqual(out.sessions.s.loaded, {});
+  assert.doesNotThrow(() => trimState(state, 's', 10));
+  const parsed = parseState({ v: 1, sessions: { A: { expanded: [], loaded: { x: 3, y: -1, z: 1.5, w: '9', big: 1e9, [`${'p'.repeat(2000)}`]: 4 } } } });
+  assert.deepEqual(parsed.sessions.A.loaded, { x: 3 });
+});

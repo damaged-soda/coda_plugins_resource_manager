@@ -17,7 +17,8 @@ async function open(t, { roots = {}, coda = {}, timers = true } = {}) {
     reads: () => sent.filter(m => m.type === 'read'),
     state: [],
   };
-  const platform = { platform: 'ios', ...coda };
+  // 默认 Mac：iPhone 上点文件不进预览，既有的预览用例都是 Mac 行为；iPhone 的用例显式传 platform: 'ios'。
+  const platform = { platform: 'mac', open: () => {}, close: () => {}, ...coda };
   const page = await loadApp(t, {
     postMessage: message => { sent.push(message); if (message.type === 'list' || message.type === 'read') queueMicrotask(() => answer(message)); },
     on: () => {},

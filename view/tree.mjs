@@ -31,7 +31,8 @@ export function visibleRows(model) {
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
 // handlers: { open(path), toggle(path), more(path), retry(path), menu(event, path, kind) }
-export function mountTree(el, model, handlers) {
+// draggable：触屏上拖行没有用处，还会抢滚动，关掉。
+export function mountTree(el, model, handlers, { draggable = true } = {}) {
   const spacer = document.createElement('div'), win = document.createElement('div');
   spacer.className = 'spacer'; win.className = 'win';
   spacer.append(win);
@@ -69,7 +70,7 @@ export function mountTree(el, model, handlers) {
     if (dead) node.classList.add('dead');
     if (row.path === model.selected) node.classList.add('sel');
     if (row.kind === EntryKind.DIR) node.setAttribute('aria-expanded', row.open);
-    if (!dead) node.draggable = true;
+    if (!dead && draggable) node.draggable = true;
     const chevron = document.createElement('span'), label = document.createElement('span'), tail = document.createElement('span');
     chevron.className = 'chev';
     chevron.textContent = row.kind === EntryKind.DIR ? (row.busy ? '…' : row.open ? '▾' : '▸') : '';

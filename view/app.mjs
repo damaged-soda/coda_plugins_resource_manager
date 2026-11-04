@@ -1,4 +1,5 @@
 // 资源管理器的页面入口：消息收发、状态保留、工具栏。状态在 model.mjs，渲染在 tree.mjs 和 preview.mjs。
+import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
 import { Model, STATE_LIMIT, noticeText, parseState, putSession, trimState } from './model.mjs';
 import { mountPreview } from './preview.mjs';
@@ -9,6 +10,8 @@ const coda = window.coda;
 const $ = id => document.getElementById(id);
 const quiet = fn => { try { return fn(); } catch { return undefined; } };
 const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac';
+// iPhone 上打开文件推入新视图，树页不进预览模式；selected 只用来高亮，从保存的状态恢复出来也一样。
+const isIOS = coda.platform === 'ios';
 
 let persisted = parseState(quiet(() => coda.getState()));
 // 恢复出来的滚动位置，等内容到了再用一次。
@@ -18,13 +21,36 @@ const conn = connect(coda, { handlers: { session: onSession, root: onRoot, chang
 const model = new Model({ link: conn.link, onChange: () => schedule() });
 model.showHidden = persisted.hidden;
 const tree = mountTree($('tree'), model, {
-  open: path => model.select(path),
+  open: openFile,
   toggle: path => model.toggle(path),
   more: path => model.loadMore(path),
   retry: path => model.retry(path),
   menu: (event, path) => showMenu(event, path),
+}, { draggable: !isIOS });
+const preview = mountPreview($('preview'), {
+  read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
+  actions: isIOS ? [] : [{ label: '窗口', run: openInView }],
 });
-const preview = mountPreview($('preview'), { read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text) });
+
+// ---- 在独立视图里打开：iPhone 点文件，Mac 预览头部的「窗口」 ----
+// 会话 ID 放进 args：被打开的视图 context.session 是 null。失败（含同步抛出）在原地提示。
+let hintTimer = null;
+function showHint(text) {
+  $('hint').textContent = text;
+  $('hint').hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { $('hint').hidden = true; }, 5000);
+}
+function openInView(path) {
+  return Promise.resolve().then(() => coda.open({ view: 'file', args: { session: model.session, path } }))
+    .then(() => { $('hint').hidden = true; }, error => showHint(`打不开文件：${error?.message ?? '未知原因'}`));
+}
+function openFile(path) {
+  model.select(path);
+  if (!isIOS) return;
+  saveNow(); // 视图随即卸载，这一刻的展开状态、条数和滚动位置先存下
+  openInView(path);
+}
 
 // ---- 渲染：同一批变化合并成一次 ----
 let queued = false;
@@ -35,7 +61,7 @@ function schedule() {
   queueMicrotask(() => { queued = false; render(); });
 }
 
-const mode = () => (!model.ready ? 'notice' : model.selected !== null ? 'preview' : 'tree');
+const mode = () => (!model.ready ? 'notice' : model.selected !== null && !isIOS ? 'preview' : 'tree');
 
 // 说明区只在内容变了才重画，免得重试按钮在点击中途被换掉。
 let noticeKey = null;
@@ -82,19 +108,12 @@ function syncToolbar(current) {
   if (key === lastItems) return;
   lastItems = key;
   if (hasToolbar) return quiet(() => coda.toolbar(items));
-  $('bar').hidden = false;
-  $('bar').replaceChildren(...items.map(item => {
-    const button = document.createElement('button');
-    button.textContent = item.label;
-    button.setAttribute('aria-pressed', item.kind === 'toggle' ? String(item.on) : 'false');
-    if (item.on) button.classList.add('on');
-    button.addEventListener('click', () => act(item.id));
-    return button;
-  }));
+  paintBar($('bar'), isIOS ? [EXIT, ...items] : items, act);
 }
 
 function act(id) {
-  if (id === 'back') model.select(null);
+  if (id === EXIT.id) quiet(() => coda.close());
+  else if (id === 'back') model.select(null);
   else if (id === 'hidden') { model.setShowHidden(!model.showHidden); persisted.hidden = model.showHidden; }
   else if (id === 'refresh') {
     conn.refresh();

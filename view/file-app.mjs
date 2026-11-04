@@ -1,5 +1,6 @@
 // 文件视图的页面入口：读一个文件。会话和路径来自 coda.args（启动值），之后的变化走 context 事件；
 // 连接在 connection.mjs，预览在 preview.mjs，这里不创建目录树。设计见 docs/design/phase-2.md 第 7 节。
+import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
 import { noticeText } from './model.mjs';
 import { mountPreview } from './preview.mjs';
@@ -122,11 +123,8 @@ if (hasToolbar) {
   quiet(() => coda.toolbar(items));
   quiet(() => coda.on('toolbar', ({ id }) => { if (id === 'refresh') refresh(); }));
 } else {
-  const button = document.createElement('button');
-  button.textContent = items[0].label;
-  button.addEventListener('click', refresh);
-  $('bar').hidden = false;
-  $('bar').replaceChildren(button);
+  const exit = coda.platform === 'ios';
+  paintBar($('bar'), exit ? [EXIT, ...items] : items, id => (id === EXIT.id ? quiet(() => coda.close()) : refresh()));
 }
 
 // ---- 阅读位置：setState 按视图和 args 隔离，每个文件自然分开 ----
