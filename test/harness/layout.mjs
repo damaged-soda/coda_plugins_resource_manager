@@ -116,7 +116,7 @@ const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__r
   coda.postMessage = message => { if (message?.requestId) { rpc.sent++; rpc.open.add(message.requestId); } if (message?.type === 'add_text') rpc.adds.push({ text: message.text, block: message.block }); return post(message); };
   coda.copy = text => { rpc.copies.push(text); };
   addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); if (event.data?.harness === 'toolbar' && event.data.items) rpc.toolbars.push(event.data.items); }, true); })()`;
-const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
+const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], tiny: [150, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
 // ready：载入后要等到出现的元素，列表是 .row.entry，图标视图是 .gi。
@@ -150,14 +150,18 @@ async function openFile(size, theme, query = 'session=A&path=notes.txt') {
 // 返回时消息已经处理完，菜单已经开了（或再按一次关了）。
 const openMore = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
   : `new Promise(resolve => { const seen = event => { if (event.data?.harness !== 'toolbar') return; removeEventListener('message', seen); resolve(); }; addEventListener('message', seen); postMessage({ harness: 'toolbar', id: 'more' }, '*'); })`);
-const menuClosed = `document.getElementById('menu').hidden`;
+const menuClosed = `document.getElementById('menu').hidden && document.getElementById('submenu').hidden`;
 // 页面发出的请求都有了回答。
 const settled = what => until(`window.__rpc.open.size === 0`, `${what}：页面发出的请求都有了回答`);
-// 在 ⋯ 菜单里选一项，等到它真正做完：菜单关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
+// ⋯ 菜单的第一层：刷新、显示隐藏文件、「显示」；视图和排序在「显示」里（Mac 放得下时在侧面板 #submenu，放不下和 iPhone 是菜单里的下一层）。
+const ROOT_LABELS = ['刷新', '显示隐藏文件', '显示'];
+// 菜单里现在看得到的按钮里找 label 并点它（JS 的 click，同步）；返回找到没有。
+const clickItem = label => evaluate(`(() => { const item = [...document.querySelectorAll('#menu button, #submenu:not([hidden]) button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
+// 在 ⋯ 菜单里选一项，等到它真正做完：菜单（两个面板）关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
 const pick = async (label, platform = 'mac', { done = null, what = '' } = {}) => {
   await openMore(platform);
-  const found = await evaluate(`(() => { const item = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
-  if (!found) throw new Error(`菜单里没有「${label}」这一项`);
+  if (!ROOT_LABELS.includes(label) && !(await clickItem('显示'))) throw new Error('菜单里没有「显示」这一项');
+  if (!(await clickItem(label))) throw new Error(`菜单里没有「${label}」这一项`);
   await until(menuClosed, `选「${label}」后菜单关闭`);
   if (done) await until(done, what);
   await settled(`选「${label}」后`);

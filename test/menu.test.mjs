@@ -20,9 +20,9 @@ const parts = page => ({
 const items = page => page.menu.find(node => node.tagName === 'BUTTON');
 const item = (page, label) => items(page).find(node => node.textContent === label);
 const pointerClick = node => { node.dispatch('pointerdown', { pointerId: 1, isPrimary: true }); node.dispatch('pointerup'); node.dispatch('click'); };
-// ⋯ 菜单的全部项：刷新、显示隐藏文件，（分隔线、小标题「排序」），四个排序项。
-const MORE_ITEMS = ['刷新', '显示隐藏文件', '名称', '种类', '日期', '大小'];
-const MORE_ROLES = ['menuitem', 'menuitemcheckbox', 'menuitemradio', 'menuitemradio', 'menuitemradio', 'menuitemradio'];
+// ⋯ 菜单根层的项：刷新、显示隐藏文件、「显示」›；视图和排序在「显示」里（test/sort-ui.test.mjs）。
+const MORE_ITEMS = ['刷新', '显示隐藏文件', '显示'];
+const MORE_ROLES = ['menuitem', 'menuitemcheckbox', 'menuitem'];
 const names = page => rowsOf(page).filter(node => node.classList.contains('entry')).map(node => node.find(part => part.classList.contains('name'))[0].textContent);
 
 test('iPhone 工具条：返回（仅横屏）、根目录名、⋯；⋯ 是图标按钮，有可访问名称和菜单属性', async t => {
@@ -65,7 +65,7 @@ test('根目录不可用时工具条仍在：名字为空，⋯ 能用', async t
   assert.equal(host.lists().length, before);
 });
 
-test('⋯ 菜单：刷新、显示隐藏文件，后者是带对勾的开关，再加排序一组；选完关闭，选完关闭；刷新发出协议刷新并重新读目录', async t => {
+test('⋯ 菜单：刷新、显示隐藏文件，后者是带对勾的开关，再加「显示」；选完关闭；刷新发出协议刷新并重新读目录', async t => {
   const { page, host } = await start(t);
   const { more } = parts(page);
   more.dispatch('click');

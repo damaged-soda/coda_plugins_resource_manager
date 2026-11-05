@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
 import { flush } from './support/fake.mjs';
+import { checkedIn, pick, shown } from './support/more.mjs';
 import { openTree, rowNamed } from './support/treehost.mjs';
 
 const OLD = new Date(2020, 2, 4, 10, 0).getTime(); // 往年：2020年3月
@@ -39,28 +40,39 @@ const lastSort = host => host.lists().at(-1).sort;
 // 打开 ⋯ 菜单选一项，等重取回来。
 async function choose(ctx, label) {
   ctx.more();
-  item(ctx.page, label).dispatch('click');
+  pick(ctx.page, label);
   await flush();
 }
 const SORTS = ['名称', '种类', '日期', '大小'];
-const checked = page => items(page).filter(node => node.getAttribute('aria-checked') === 'true').map(node => node.textContent);
+// 排序在「显示」里：先进去，再看哪些项打了对勾（视图那一组的对勾不算，排序的四项才算）。
+const checked = page => checkedIn(page).filter(label => SORTS.includes(label));
 
 for (const platform of ['mac', 'ios']) {
   const side = platform === 'mac' ? 'Mac' : 'iPhone';
 
-  test(`${side} ⋯ 菜单：刷新、显示隐藏文件，分隔线，小标题「排序」，名称 / 种类 / 日期 / 大小，当前项有对勾`, async t => {
+  test(`${side} ⋯ 菜单：刷新、显示隐藏文件、「显示」›；「显示」里小标题「视图」列表 / 图标，分隔线，小标题「排序」名称 / 种类 / 日期 / 大小，当前项有对勾`, async t => {
     const ctx = await start(t, { platform });
     const { page } = ctx;
     ctx.more();
     assert.ok(visible(page.menu));
-    assert.deepEqual(page.menu.children.map(node => node.tagName), ['BUTTON', 'BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'], '一条分隔线、一个小标题，其余是项');
-    assert.equal(page.menu.children[3].textContent, '排序');
-    assert.equal(page.menu.children[2].tagName, 'HR');
-    assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件', ...SORTS]);
-    assert.deepEqual(items(page).map(node => node.getAttribute('role')), ['menuitem', 'menuitemcheckbox', ...SORTS.map(() => 'menuitemradio')]);
-    assert.deepEqual(items(page).map(node => node.getAttribute('aria-checked')), [null, 'false', 'true', 'false', 'false', 'false']);
-    assert.deepEqual(items(page).map(node => node.find(n => n.tagName === 'SVG').length), [0, 0, 1, 0, 0, 0], '只有名称有对勾');
-    assert.deepEqual(items(page).map(node => node.children.length), Array(6).fill(2), '每一项都留对勾的位置，文字才对齐');
+    assert.deepEqual(page.menu.children.map(node => node.tagName), ['BUTTON', 'BUTTON', 'BUTTON'], '根层只有三项，排序不平铺');
+    assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件', '显示']);
+    assert.deepEqual(items(page).map(node => node.getAttribute('role')), ['menuitem', 'menuitemcheckbox', 'menuitem']);
+    assert.deepEqual(items(page).map(node => node.getAttribute('aria-haspopup')), [null, null, 'menu']);
+    assert.equal(item(page, '显示').getAttribute('aria-expanded'), 'false');
+    assert.equal(item(page, '显示').find(node => node.classList.contains('sub-arrow')).length, 1, '右边有箭头');
+
+    item(page, '显示').dispatch('click');
+    const layer = shown(page);
+    assert.ok(visible(page.menu), '点「显示」不关菜单');
+    assert.deepEqual(layer.map(node => node.textContent), ['返回', '列表', '图标', '名称', '种类', '日期', '大小']);
+    assert.deepEqual(page.menu.children.map(node => node.tagName), ['BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'], '返回、分隔线，小标题「视图」和两项，分隔线，小标题「排序」和四项');
+    assert.deepEqual(page.menu.children.filter(node => node.tagName === 'P').map(node => node.textContent), ['视图', '排序']);
+    const leaves = layer.slice(1);
+    assert.deepEqual(leaves.map(node => node.getAttribute('role')), Array(6).fill('menuitemradio'));
+    assert.deepEqual(leaves.map(node => node.getAttribute('aria-checked')), ['true', 'false', 'true', 'false', 'false', 'false']);
+    assert.deepEqual(leaves.map(node => node.find(n => n.tagName === 'SVG').length), [1, 0, 1, 0, 0, 0], '当前的视图（列表）和排序（名称）有对勾');
+    assert.deepEqual(leaves.map(node => node.children.length), Array(6).fill(2), '每一项都留对勾的位置，文字才对齐');
     assert.equal(part(page.menu, 'menu-path'), undefined, '这个菜单没有路径标题');
   });
 
@@ -116,7 +128,7 @@ for (const platform of ['mac', 'ios']) {
     assert.equal(host.lists()[0].sort, DATE, '第一页请求就带着它');
     ctx.more();
     assert.deepEqual(checked(page), ['日期']);
-    item(page, '大小').dispatch('click');
+    pick(page, '大小');
     await flush();
     ctx.events.visibility(false);
     assert.equal(saved.at(-1).sort, 'size');

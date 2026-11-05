@@ -115,14 +115,19 @@ button.icon svg { display: block; }
   background: var(--coda-card, var(--coda-background, #fff));
   /* 高度有上限：内容多（长路径加五项）时在菜单里滚动，不超出安全区；位置由 menu.mjs 夹在安全区内。 */
   max-height: calc(100vh - var(--safe-top) - var(--safe-bottom) - 8px); overflow-y: auto; overscroll-behavior: contain; }
-.menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
-.check { flex: none; display: grid; place-items: center; width: 16px; color: var(--coda-accent, #0a84ff); }
+.menu button { display: flex; align-items: center; gap: 4px; width: 100%; padding: 5px 8px; border-radius: var(--coda-radius, 6px); }
+.check { flex: none; display: grid; place-items: center; width: 14px; color: var(--coda-accent, #0a84ff); }
 .check svg { display: block; }
+.check.back { color: var(--coda-secondary, #6e6e73); }
+/* 带二级菜单的项：右边的箭头；展开着的和悬停同色。 */
+.sub-arrow { flex: none; display: grid; place-items: center; margin-left: auto; padding-left: 12px; color: var(--coda-secondary, #6e6e73); }
+.sub-arrow svg { display: block; }
+.menu button[aria-expanded="true"] { background: var(--coda-selection, var(--hover)); }
 /* 菜单宽度随内容，上限见 .menu：路径超过上限折行，大小 · 完整修改时间不折。 */
-.menu-path { padding: 4px 10px 6px; overflow-wrap: anywhere; }
-.menu-info { padding: 0 10px 6px; margin-top: -4px; white-space: nowrap; }
+.menu-path { padding: 4px 8px 6px; overflow-wrap: anywhere; }
+.menu-info { padding: 0 8px 6px; margin-top: -4px; white-space: nowrap; }
 .menu-sep { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
-.menu-head { padding: 4px 10px 2px; font-weight: 600; }
+.menu-head { padding: 4px 8px 2px; font-weight: 600; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
 /* 底部的短提示：普通的是前景色（成功），.warn 是橙色（失败）。 */
@@ -142,23 +147,26 @@ button.icon svg { display: block; }
 
 /* 图标视图：头部同预览（样式和 .phead 一样，类名另取，页面和 harness 里按 .phead 查预览头部的不会撞上），下面一个滚动的 .gbody，只画可见的一段（grid.mjs 量 .cell 的宽和高）。
    单元格宽度固定，Mac 约 72 点、iPhone 约 88 点；列数按容器宽度算，每列的宽度平分余下的空间，单元格在列里居中。说明项占满一整行。 */
-:root { --cell-w: 72px; --gico: 32px; }
-.coda-ios { --cell-w: 88px; --gico: 40px; }
+:root { --cell-w: 72px; --gico: 32px; --gname-h: calc(var(--coda-font-size, 13px) * 2.4); --note-h: calc(var(--coda-font-size, 13px) * 2.4); }
+.coda-ios { --cell-w: 88px; --gico: 40px; --note-h: 44px; }
 .grid { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; } /* 底部的安全区归 .gbody */
 .gbody { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: var(--safe-bottom); }
 .gspacer { position: relative; margin: 8px 0; }
 .gwin { position: absolute; left: 0; right: 0; top: 0; display: grid; justify-items: center; }
 .gi { cursor: default; }
-.cell { display: flex; flex-direction: column; align-items: center; gap: 4px; width: var(--cell-w); height: calc(var(--gico) + var(--coda-font-size, 13px) * 2.7 + 16px); padding: 6px 4px; border-radius: var(--coda-radius, 6px); }
+/* 单元格是固定高度：图标、两行名字（.gname 的行高 1.3、字号 .92em，两行 2.392 个字号，--gname-h 取 2.4）、上下各 4 点，刚好放下，只有一行名字时不多留空白。 */
+.cell { display: flex; flex-direction: column; align-items: center; gap: 2px; width: var(--cell-w); height: calc(var(--gico) + 2px + var(--gname-h) + 8px); padding: 4px; border-radius: var(--coda-radius, 6px); }
 .cell.sel { background: var(--coda-selection, var(--hover)); }
 .cell .gico { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
 .cell .gico svg { display: block; width: var(--gico); height: var(--gico); }
 .cell.dir .gico { color: var(--coda-accent, #0a84ff); }
 .cell.dead .gname, .cell.dead .gico { color: var(--coda-tertiary, #a1a1a6); }
 .gname { max-width: 100%; text-align: center; font-size: .92em; line-height: 1.3; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.gnote { grid-column: 1 / -1; justify-self: stretch; display: grid; place-items: center; height: calc(var(--gico) + var(--coda-font-size, 13px) * 2.7 + 16px); padding: 0 16px; text-align: center; color: var(--coda-secondary, #6e6e73); }
+/* 说明行（空目录、读取中……）一行高，比单元格矮；grid.mjs 分别量两种高度，布局映射按两种算。 */
+.gnote { grid-column: 1 / -1; justify-self: stretch; height: var(--note-h); line-height: var(--note-h); padding: 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; color: var(--coda-secondary, #6e6e73); }
 .gnote.more, .gnote.retry { color: var(--coda-accent, #0a84ff); cursor: pointer; }
 .coda-ios .cell { -webkit-touch-callout: none; } /* 长按由页面接管，不弹系统菜单 */
+.coda-ios .cell:active { background: var(--hover); } /* 按下：和列表的行一样 */
 
 /* 悬停只在有鼠标时：触摸后不会留着。 */
 @media (hover: hover) {
@@ -198,8 +206,9 @@ button.icon svg { display: block; }
 .coda-ios .phead, .coda-ios .ghead { padding: 4px 12px; gap: 4px; }
 .coda-ios .phead button, .coda-ios .ghead button { padding: 0 8px; }
 .coda-ios .code { font-size: .8em; } /* 窄屏多看些：17 点下约 13.6 点 */
-.coda-ios .menu button { padding: 0 12px; }
-.coda-ios .menu-head { padding: 6px 12px 2px; }
+.coda-ios .menu button { padding: 0 10px; }
+.coda-ios .menu button:active { background: var(--coda-selection, var(--hover)); }
+.coda-ios .menu-head { padding: 6px 10px 2px; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
 .bar .exit, .bar.exit-only { display: none; } /* 只有返回的工具条（属性页）：返回不显示，整条也不占高度 */

@@ -1,4 +1,4 @@
-// 资源管理器的页面入口：消息收发、状态保留、工具栏、图标视图的进入和返回。状态在 model.mjs，渲染在 tree.mjs、grid.mjs、preview.mjs 和 info.mjs，菜单和提示在 menu.mjs 和 hint.mjs，滚动位置的恢复在 restore.mjs。
+// 资源管理器的页面入口：消息收发、状态保留、工具栏和「更多」菜单、图标视图的进入和返回。状态在 model.mjs，渲染在 tree.mjs、grid.mjs、preview.mjs 和 info.mjs，菜单和提示在 menu.mjs 和 hint.mjs，滚动位置的恢复在 restore.mjs。
 import { EXIT, paintBar } from './bar.mjs';
 import { createChat } from './chat.mjs';
 import { connect } from './connection.mjs';
@@ -31,7 +31,7 @@ model.showHidden = persisted.hidden;
 model.sort = persisted.sort;
 model.view = persisted.view;
 const hint = mountHint($('hint'));
-const menu = mountMenu($('menu'));
+const menu = mountMenu($('menu'), $('submenu'), { flyout: !isIOS }); // Mac 的二级菜单在左边弹出，iPhone 在菜单里切到下一层
 const chat = createChat({ link: conn.link, copy: text => coda.copy(text), hint });
 // 属性页和图标视图的上一层：iPhone 用原生返回（coda.back）；Mac 的客户端会替声明了返回的页面画一个带小箭头的导航，
 // 和侧栏标题重复，所以 Mac 和没有 coda.back 的环境一样，头部最左边自己放返回。
@@ -174,13 +174,18 @@ function syncToolbar() {
 
 // 原生按钮没有 DOM 元素可以当锚点：用一个固定在页面右上角的假锚点，同时也是「谁打开的菜单」的标记。
 const TOOLBAR = { getBoundingClientRect: () => ({ right: window.innerWidth, bottom: 0 }) };
-// 「更多」菜单的内容只写这一处，iPhone 的 ⋯ 和 Mac 的原生按钮共用：刷新、显示隐藏文件，分隔线，小标题和平铺的四个排序项。
+// 「更多」菜单的内容只写这一处，iPhone 的 ⋯ 和 Mac 的原生按钮共用：刷新、显示隐藏文件、「显示」›；「显示」里是视图和排序，当前项有对勾。
 const moreMenu = () => ({ items: [
   { label: '刷新', run: () => act('refresh') },
   { label: '显示隐藏文件', checked: model.showHidden, run: () => act('hidden') },
-  { separator: true },
-  { heading: '排序' },
-  ...Object.values(SortKey).map(key => ({ label: sortName(key), checked: key === model.sort, radio: true, run: () => changeSort(key) })),
+  { label: '显示', submenu: { items: [
+    { heading: '视图' },
+    { label: '列表', checked: model.view === View.LIST, radio: true, run: () => changeView(View.LIST) },
+    { label: '图标', checked: model.view === View.ICONS, radio: true, run: () => changeView(View.ICONS) },
+    { separator: true },
+    { heading: '排序' },
+    ...Object.values(SortKey).map(key => ({ label: sortName(key), checked: key === model.sort, radio: true, run: () => changeSort(key) })),
+  ] } },
 ] });
 
 // 换排序：旧的滚动位置对新顺序没有意义，待恢复的和上层的记录作废，两种视图都回到顶部；排序是全局的，存进 persisted。选当前项什么都不做。
@@ -196,7 +201,7 @@ function changeSort(sort) {
 }
 
 // 换视图：全局一份，存进 persisted；两种视图各留着自己的内容和滚动位置，换回来还在。
-// 第 2 步的「显示」菜单调用它；这一步没有用户入口，测试和 harness 经模块导出调用。
+// 「显示」菜单调用它；测试和 harness 也经模块导出直接调用。
 export function changeView(view) {
   const before = model.view;
   model.setView(view);
@@ -258,7 +263,7 @@ grid.onScroll(() => restore.scrolled('grid'));
 preview.onScroll(queueSave);
 preview.onScroll(menu.hide);
 
-// ---- 行菜单：Mac 右键、iPhone 长按；iPhone 的 ⋯ 和 Mac 的原生「更多」出刷新、显示隐藏文件和排序（菜单本身在 menu.mjs）----
+// ---- 行菜单：Mac 右键、iPhone 长按；iPhone 的 ⋯ 和 Mac 的原生「更多」出刷新、显示隐藏文件和「显示」（视图、排序）（菜单本身在 menu.mjs）----
 // 行菜单顶上是路径，下面一行 大小 · 完整修改时间（文件夹只有修改时间，读不到就没有这一行）；指向外面的链接和不能打开的条目没有元数据，不显示这一行。
 // 不能打开的条目（指向外面或失效的链接、other）没有「添加到聊天」，和不能拖动一致；它们仍有复制路径和属性。
 function pathMenu(event, row) {

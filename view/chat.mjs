@@ -9,13 +9,17 @@ export const MESSAGES = {
   added: '已添加到输入框',
   failed: '没能写入输入框，已复制',
   tooLong: '选中内容太长，已复制',
+  copyFailed: '没能写入，也没能复制',
 };
 
 // link：连接层的 Link；copy(text)：复制到剪贴板；hint：view/hint.mjs 的提示。
 export function createChat({ link, copy, hint }) {
-  const copied = (text, message) => {
-    try { Promise.resolve(copy(text)).catch(() => {}); } catch { /* 剪贴板不可用 */ }
-    hint.show(message);
+  // 等复制的结果再提示：剪贴板同步抛错、异步拒绝都算失败。回来时会话换过了（generation 变了，A→B→A 也算）就什么都不提示，那条提示属于上一个会话。
+  const copied = async (text, message) => {
+    const { generation } = link;
+    let ok = true;
+    try { await copy(text); } catch { ok = false; }
+    if (link.generation === generation) hint.show(ok ? message : MESSAGES.copyFailed);
   };
 
   // block：true 是内容（另起一行），false 是路径和位置（接在后面）。

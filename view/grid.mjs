@@ -54,6 +54,39 @@ export function rowOfCell(layout, index) {
   const span = layout.spans.find(item => index >= item.from && index < item.from + item.count);
   return span.note ? span.row : span.row + Math.floor((index - span.from) / layout.cols);
 }
+// 行高分两种：条目行 cellH，说明行 noteH（说明行不必和单元格一样高）。布局映射按行记，高度在这里换算，总高度、可见窗口、点击都用同一份。
+// 第 row 行顶边的位置；row 等于总行数时是总高度。
+export function rowTop(layout, row, cellH, noteH) {
+  let y = 0;
+  for (const span of layout.spans) {
+    const unit = span.note ? noteH : cellH;
+    if (row < span.row + span.rows) return y + Math.max(0, row - span.row) * unit;
+    y += span.rows * unit;
+  }
+  return y;
+}
+// y 落在第几行（向下取整）；超出内容是总行数。
+export function rowAt(layout, y, cellH, noteH) {
+  let top = 0;
+  for (const span of layout.spans) {
+    const unit = span.note ? noteH : cellH, height = span.rows * unit;
+    if (y < top + height) return span.row + Math.max(0, Math.floor((y - top) / unit));
+    top += height;
+  }
+  return layout.rows;
+}
+// 顶边在 y 之上的行数（向上取整）：可见窗口画到这一行之前。
+export function rowsAbove(layout, y, cellH, noteH) {
+  let top = 0;
+  for (const span of layout.spans) {
+    const unit = span.note ? noteH : cellH, height = span.rows * unit;
+    if (y <= top) return span.row;
+    if (y < top + height) return span.row + Math.ceil((y - top) / unit);
+    top += height;
+  }
+  return layout.rows;
+}
+
 // 第 first 行（含）到第 last 行（不含）的单元格序号范围 [from, to)。
 export function windowOf(layout, first, last) {
   if (first >= last) return { from: 0, to: 0 };
@@ -70,17 +103,19 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
   spacer.append(win);
   body.append(spacer);
   el.replaceChildren(head, body);
-  let cells = [], layout = layoutOf([], 1), cellW = 72, cellH = 84, measuredWidth = -1, headKey = null;
+  let cells = [], layout = layoutOf([], 1), cellW = 72, cellH = 76, noteH = 32, measuredWidth = -1, headKey = null;
 
-  // 探针放在 win 里：量到的是单元格在真实结构里的宽和高。
+  // 探针放在 win 里：量到的是单元格和说明行在真实结构里的尺寸，两种行高不同。
   const measure = () => {
-    const probe = h('div', { class: 'gi cell' });
-    probe.style.visibility = 'hidden';
-    win.append(probe);
+    const probe = h('div', { class: 'gi cell' }), note = h('div', { class: 'gi gnote' });
+    probe.style.visibility = note.style.visibility = 'hidden';
+    win.append(probe, note);
     const box = probe.getBoundingClientRect();
     cellW = box.width || cellW;
     cellH = box.height || cellH;
+    noteH = note.getBoundingClientRect().height || noteH;
     probe.remove();
+    note.remove();
   };
   const columns = () => Math.max(1, Math.floor(body.clientWidth / cellW));
 
@@ -98,10 +133,10 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
 
   function paint() {
     const top = body.scrollTop - (spacer.offsetTop || 0);
-    const first = Math.max(0, Math.floor(top / cellH) - OVERSCAN);
-    const last = Math.min(layout.rows, Math.ceil((top + body.clientHeight) / cellH) + OVERSCAN);
+    const first = Math.max(0, rowAt(layout, Math.max(0, top), cellH, noteH) - OVERSCAN);
+    const last = Math.min(layout.rows, rowsAbove(layout, top + body.clientHeight, cellH, noteH) + OVERSCAN);
     const { from, to } = windowOf(layout, first, last);
-    win.style.transform = `translateY(${(from === to ? 0 : rowOfCell(layout, from)) * cellH}px)`;
+    win.style.transform = `translateY(${from === to ? 0 : rowTop(layout, rowOfCell(layout, from), cellH, noteH)}px)`;
     win.style.gridTemplateColumns = `repeat(${layout.cols}, minmax(0, 1fr))`;
     win.replaceChildren(...cells.slice(from, to).map((cell, i) => cellNode(cell, from + i)));
   }
@@ -118,7 +153,9 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
     const dead = cell.kind === EntryKind.LINK || cell.kind === EntryKind.OTHER;
     node.className = `gi cell ${cell.kind}${dead ? ' dead' : ''}${cell.path === model.selected ? ' sel' : ''}`;
     if (!dead && draggable) node.draggable = true;
-    const glyph = h('span', { class: 'gico' }, icon(iconFor(cell), 32)), name = h('span', { class: 'gname' }, cell.name);
+    // 扩展名前给一个优先断点：package.json 折成 package / .json，不在字母中间断；没有点（或点在最前面）、太长时 overflow-wrap 才在任意位置断。
+    const dot = cell.name.lastIndexOf('.');
+    const glyph = h('span', { class: 'gico' }, icon(iconFor(cell), 32)), name = h('span', { class: 'gname' }, ...(dot > 0 ? [cell.name.slice(0, dot), h('wbr'), cell.name.slice(dot)] : [cell.name]));
     const info = TITLES[cell.kind] ? '' : infoText(cell);
     node.title = TITLES[cell.kind] ? `${cell.path}\n${TITLES[cell.kind]}` : info ? `${cell.path}\n${info}` : cell.path;
     node.append(glyph, name);
@@ -128,10 +165,10 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
   // 按现在的单元格和列数重新生成布局映射。列数变了（拖窄、旋转）：保持第一个可见的单元格还在顶部，不保持像素。
   function rebuild() {
     const cols = columns(), top = Math.max(0, body.scrollTop - (spacer.offsetTop || 0));
-    const anchor = cols !== layout.cols && layout.rows && top > 0 ? firstOfRow(layout, Math.min(layout.rows - 1, Math.floor(top / cellH))) : null;
+    const anchor = cols !== layout.cols && layout.rows && top > 0 ? firstOfRow(layout, Math.min(layout.rows - 1, rowAt(layout, top, cellH, noteH))) : null;
     layout = layoutOf(cells, cols);
-    spacer.style.height = `${layout.rows * cellH}px`;
-    if (anchor !== null && anchor < cells.length) body.scrollTop = (spacer.offsetTop || 0) + rowOfCell(layout, anchor) * cellH;
+    spacer.style.height = `${rowTop(layout, layout.rows, cellH, noteH)}px`;
+    if (anchor !== null && anchor < cells.length) body.scrollTop = (spacer.offsetTop || 0) + rowTop(layout, rowOfCell(layout, anchor), cellH, noteH);
   }
   function relayout() {
     if (columns() !== layout.cols) rebuild();

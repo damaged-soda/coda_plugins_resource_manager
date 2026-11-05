@@ -1,24 +1,32 @@
 // 菜单：Mac 右键、iPhone 长按的行菜单，Mac 选中文字的右键菜单，iPhone 的 ⋯ 和 Mac 原生「更多」弹出的菜单都用它，树页和文件页各挂一个。
-// 菜单开着时点菜单外只关菜单、紧接着的那次点击不交给页面；Escape、窗口失焦关闭；页面里别的滚动区域滚动时由页面调 hide。
+// 菜单开着时点菜单外只关菜单、紧接着的那次点击不交给页面；Escape、窗口失焦、旋转（窗口尺寸变化）关闭；页面里别的滚动区域滚动时由页面调 hide。
+// 菜单可以有一层二级菜单（项里写 submenu）。「整次菜单」（current）和「当前层」（layer、fly）分开记：
+// 在面板里切到下一层、退回来，整次菜单还是同一次，但上一层的按钮不再响应。第二个面板（sub）也算菜单里面，点它不是点外面。
 import { icon } from './icons.mjs';
 
-// el：页面里的 #menu。open 之后的位置按安全区夹住（横屏时客户端不替页面留）；offsetWidth 在显示后才量得到。
+const CLOSE_MS = 150; // 鼠标移到别的项之后，侧面板收起前等多久：斜着移过去不会误关
+const GAP = 2; // 侧面板和根面板之间留的空隙
+
+// el：页面里的 #menu。sub：侧面板（#submenu），没有就不能弹出，二级菜单总是在 el 里切到下一层。
+// flyout：true 时（Mac）鼠标移上去或点击「显示」这类项，侧面板在根面板左边弹出；放不下就退成切到下一层（iPhone 总是这样）。
+// open 之后的位置按安全区夹住（横屏时客户端不替页面留）；offsetWidth 在显示后才量得到。
 // 高度有上限（style.css 的 .menu）：内容多时在菜单里滚动，不超出安全区。
-export function mountMenu(el) {
+export function mountMenu(el, sub = null, { flyout = false } = {}) {
   let opener = null; // 打开菜单的按钮；用点打开的没有
   let current = null; // 这一次打开的标记：关闭之后留在手里的按钮不再响应
+  let layer = 0; // el 里现在是哪一层：每次换层（进下一层、退回、重新打开、关闭）加一，旧层的按钮据此作废
+  let fly = 0; // 侧面板的第几次展开：收起、重开都加一
+  let spec = null, anchor = null; // 根层的内容和锚点：退回根层、换层后重新定位要用
+  let flyButton = null; // 展开着侧面板的那个项
+  let closeTimer = null;
 
-  // anchor：按钮元素或同样有 getBoundingClientRect 的假锚点（菜单贴在它下面、右对齐）或 { clientX, clientY } 的点。
-  // items：[{ label, run, checked?, radio? } | { separator: true } | { heading }]，checked 不是 undefined 的带对勾（radio 的是单选，其余是开关）；
-  // 分隔线和小标题不是菜单项，不可点。title 写在菜单顶上：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全；detail 是它下面的一行小字。
-  function open(anchor, { title, detail, items }) {
-    hide();
-    const mine = current = {};
-    const head = [];
-    if (title !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-path secondary', textContent: title }));
-    if (detail !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-info secondary caption', textContent: detail }));
+  // items：[{ label, run, checked?, radio? } | { label, submenu: { items } } | { separator: true } | { heading }]，checked 不是 undefined 的带对勾（radio 的是单选，其余是开关）；
+  // 分隔线和小标题不是菜单项，不可点。hover：这一层的项在鼠标移上去时管侧面板（只有根层，且 flyout）。
+  // alive：这一层还有没有效，点击时先问它。
+  function build(items, alive, hover) {
     const checkable = items.some(item => item.checked !== undefined); // 有开关项时，每一项都留出对勾的位置，文字才对齐
-    el.replaceChildren(...head, ...items.map(({ label, run, checked, radio, separator, heading }) => {
+    return items.map(item => {
+      const { label, run, checked, radio, separator, heading, submenu } = item;
       if (separator) return Object.assign(document.createElement('hr'), { className: 'menu-sep' });
       if (heading !== undefined) return Object.assign(document.createElement('p'), { className: 'menu-head secondary caption', textContent: heading });
       const button = document.createElement('button'), name = document.createElement('span');
@@ -26,46 +34,157 @@ export function mountMenu(el) {
       if (checkable) {
         const mark = document.createElement('span');
         mark.className = 'check';
-        if (checked) mark.append(icon('check', 16));
+        if (checked) mark.append(icon('check', 14));
         button.append(mark);
       }
       button.append(name);
-      button.setAttribute('role', checked === undefined ? 'menuitem' : radio ? 'menuitemradio' : 'menuitemcheckbox');
-      if (checked !== undefined) button.setAttribute('aria-checked', String(checked));
-      button.addEventListener('click', () => {
-        if (current !== mine) return; // 菜单已经关了（或换成了别的）：留在手里的按钮不再响应
-        hide();
-        run();
+      if (submenu) {
+        const arrow = document.createElement('span');
+        arrow.className = 'sub-arrow';
+        arrow.append(icon('chevron', 14));
+        button.append(arrow);
+        button.setAttribute('role', 'menuitem');
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        // 进下一层不是叶子项：不关菜单，也不执行什么。
+        button.addEventListener('click', () => { if (alive()) show(button, item, true); });
+      } else {
+        button.setAttribute('role', checked === undefined ? 'menuitem' : radio ? 'menuitemradio' : 'menuitemcheckbox');
+        if (checked !== undefined) button.setAttribute('aria-checked', String(checked));
+        button.addEventListener('click', () => {
+          if (!alive()) return; // 菜单已经关了（换成了别的、退回了上一层）：留在手里的按钮不再响应
+          hide();
+          run();
+        });
+      }
+      if (hover) button.addEventListener('pointerenter', event => {
+        if (!alive() || event.pointerType === 'touch') return;
+        if (submenu) show(button, item, false); else later();
       });
       return button;
-    }));
-    el.hidden = false;
+    });
+  }
+
+  // 根层：路径标题、信息行，和项。
+  function paintRoot() {
+    const { title, detail, items } = spec, mine = current, mineLayer = ++layer;
+    const head = [];
+    if (title !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-path secondary', textContent: title }));
+    if (detail !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-info secondary caption', textContent: detail }));
+    el.replaceChildren(...head, ...build(items, () => current === mine && layer === mineLayer, flyout && sub !== null));
     el.scrollTop = 0;
+  }
+
+  // 贴在锚点下面、右对齐（锚点是按钮元素或同样有 getBoundingClientRect 的假锚点），或放在点上；每次换层内容宽度变了都要重来。
+  function place() {
     const box = anchor.getBoundingClientRect?.();
     const x = box ? box.right - el.offsetWidth : anchor.clientX, y = box ? box.bottom + 4 : anchor.clientY;
     el.style.left = `max(var(--safe-left), min(${x}px, calc(100vw - var(--safe-right) - ${el.offsetWidth + 4}px)))`;
     el.style.top = `max(var(--safe-top), min(${y}px, calc(100vh - var(--safe-bottom) - ${el.offsetHeight + 4}px)))`;
-    if (box) { opener = anchor; opener.setAttribute?.('aria-expanded', 'true'); }
   }
+
+  // anchor：按钮元素或同样有 getBoundingClientRect 的假锚点（原生按钮：只代表根层，子菜单贴的是真实的项）或 { clientX, clientY } 的点。
+  // title 写在菜单顶上：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全；detail 是它下面的一行小字。
+  function open(at, content) {
+    hide();
+    current = {};
+    spec = content;
+    anchor = at;
+    paintRoot();
+    el.hidden = false;
+    place();
+    if (at.getBoundingClientRect) { opener = at; opener.setAttribute?.('aria-expanded', 'true'); }
+  }
+
+  // 二级菜单：click 是点击（键盘激活也是）；鼠标移上去只在放得下时弹出，放不下什么都不做，免得内容在鼠标底下突然换掉。
+  function show(button, item, click) {
+    keep();
+    if (flyout && sub !== null) {
+      if (flyButton === button) return; // 已经开着
+      collapse();
+      const mine = current, mineFly = ++fly;
+      const nodes = build(item.submenu.items, () => current === mine && fly === mineFly, false);
+      sub.replaceChildren(...nodes);
+      sub.hidden = false;
+      sub.style.visibility = 'hidden'; // 先量尺寸再决定放不放得下，量的时候别让人看到
+      sub.scrollTop = 0;
+      const { offsetWidth, offsetHeight } = sub, root = el.getBoundingClientRect(), at = button.getBoundingClientRect();
+      const x = root.left - offsetWidth - GAP;
+      if (x >= safeLeft()) {
+        sub.style.left = `${x}px`;
+        sub.style.top = `max(var(--safe-top), min(${at.top - 5}px, calc(100vh - var(--safe-bottom) - ${offsetHeight + 4}px)))`; // 第一项和「显示」对齐：减去面板的边框和内边距
+        sub.style.visibility = '';
+        flyButton = button;
+        button.setAttribute('aria-expanded', 'true');
+        if (click) nodes.find(node => node.tagName === 'BUTTON')?.focus?.(); // 键盘激活：焦点进侧面板
+        return;
+      }
+      collapse(); // 放不下：和 iPhone 一样切到下一层
+    }
+    if (click) enter(item);
+  }
+
+  // 在 el 里切到下一层：顶上一行返回；点返回回到根层，下一层的按钮此后不再响应。
+  function enter(item) {
+    const mine = current, mineLayer = ++layer, alive = () => current === mine && layer === mineLayer;
+    const back = document.createElement('button'), mark = document.createElement('span'), name = document.createElement('span');
+    mark.className = 'check back';
+    mark.append(icon('back', 14));
+    name.textContent = '返回';
+    back.className = 'menu-back';
+    back.append(mark, name);
+    back.setAttribute('role', 'menuitem');
+    back.addEventListener('click', () => {
+      if (!alive()) return;
+      paintRoot();
+      place();
+    });
+    el.replaceChildren(back, Object.assign(document.createElement('hr'), { className: 'menu-sep' }), ...build(item.submenu.items, alive, false));
+    el.scrollTop = 0;
+    place();
+  }
+
+  // 鼠标回到「显示」或侧面板：取消正在等的收起。
+  function keep() { clearTimeout(closeTimer); closeTimer = null; }
+  // 鼠标移到别的项：等一会儿再收起侧面板。
+  function later() {
+    if (flyButton === null || closeTimer !== null) return;
+    const mine = current;
+    closeTimer = setTimeout(() => { closeTimer = null; if (current === mine) collapse(); }, CLOSE_MS);
+  }
+  function collapse() {
+    keep();
+    fly++; // 侧面板里的旧按钮不再响应
+    if (sub) sub.hidden = true;
+    flyButton?.setAttribute('aria-expanded', 'false');
+    flyButton = null;
+  }
+  // 安全区的左边：body 的左内边距就是它（style.css），算出来的是像素。读不到按 0。
+  const safeLeft = () => { const px = parseFloat(globalThis.getComputedStyle?.(document.body)?.paddingLeft); return Number.isFinite(px) ? px : 0; };
 
   function hide() {
     current = null;
+    layer++;
+    collapse();
     el.hidden = true;
     opener?.setAttribute?.('aria-expanded', 'false');
     opener = null;
   }
 
-  // 菜单开着时点菜单外：只关菜单，紧接着的那次点击不交给页面。
+  // 两个面板都算菜单里面。菜单开着时点菜单外：只关菜单，紧接着的那次点击不交给页面。
+  const inside = target => el.contains(target) || (sub !== null && sub.contains(target));
   let dismissed = false;
   document.addEventListener('pointerdown', event => {
-    dismissed = !el.hidden && !el.contains(event.target);
-    if (!el.contains(event.target)) hide();
+    dismissed = !el.hidden && !inside(event.target);
+    if (!inside(event.target)) hide();
   }, true);
   document.addEventListener('click', event => {
     if (dismissed) { dismissed = false; event.stopPropagation(); }
   }, true);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });
   window.addEventListener('blur', hide);
+  window.addEventListener('resize', hide); // 旋转、拖窄侧栏：位置对不上了
+  sub?.addEventListener('pointerenter', keep);
 
   return {
     open, hide,

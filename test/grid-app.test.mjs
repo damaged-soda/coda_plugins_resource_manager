@@ -1,9 +1,10 @@
 // 图标视图接进页面（view/app.mjs）：单击进入和打开、右键、长按、上一层（Mac 头部、iPhone 原生返回和 EXIT）、滚动位置的保存和恢复。
-// 真实的 app.mjs、Model、Link、grid.mjs，配最小的假 DOM 和脚本化的假模块；视图用 changeView 切换（页面入口的导出，第 2 步的菜单调用它）。
+// 真实的 app.mjs、Model、Link、grid.mjs，配最小的假 DOM 和脚本化的假模块；视图用 changeView 切换（页面入口的导出，「显示」菜单也调用它）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
 import { flush } from './support/fake.mjs';
+import { pick } from './support/more.mjs';
 import { openTree } from './support/treehost.mjs';
 
 const FILES = Array.from({ length: 90 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
@@ -287,7 +288,7 @@ test('换排序：两种视图都回到顶部，上层的记录作废；显示�
   await click(page, 'dir');
   const choose = async label => {
     host.events.toolbar({ id: 'more' });
-    page.menu.find(node => node.tagName === 'BUTTON').find(node => node.textContent === label).dispatch('click');
+    pick(page, label);
     await flush();
   };
   scrollTo(page, ROW * 6);
@@ -313,7 +314,7 @@ test('恢复途中换排序：待恢复的位置作废，内容到了也不跳',
   host.session('s1', '/A');
   await flush();
   host.events.toolbar({ id: 'more' });
-  page.menu.find(node => node.tagName === 'BUTTON').find(node => node.textContent === '大小').dispatch('click');
+  pick(page, '大小');
   await flush();
   host.held.clear();
   host.heldLists.splice(0).forEach(request => host.answer(request, { entries: FILES.slice(0, 40).map(name => ({ name, kind: 'file' })), nextCursor: null }));
