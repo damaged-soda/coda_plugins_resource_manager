@@ -19,8 +19,13 @@ export function mountInfo(el, { stat, size, rootPath, round, back = null }) {
   let token = 0; // 取属性的序号：新的取代旧的，旧的回答不再用
 
   const entry = () => reply ?? seed;
+  // 指向工作目录内的链接按目标显示：种类和图标看目标的名字（链接自己叫什么不管），没有目标的（外链接）看自己。
+  const shownKind = () => {
+    const { kind, name } = entry(), target = reply?.target;
+    return kindOf({ kind, name: target ? target.slice(target.lastIndexOf('/') + 1) : name });
+  };
   const kindText = () => {
-    const base = kindOf(entry()).label;
+    const base = shownKind().label;
     if (entry().kind === EntryKind.LINK) return `${base}（指向工作目录外或已失效）`;
     return reply?.link ? `${base}（链接）` : base;
   };
@@ -41,7 +46,7 @@ export function mountInfo(el, { stat, size, rootPath, round, back = null }) {
     const focused = body.contains(document.activeElement);
     const { name, kind } = entry(), where = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '工作目录';
     head.replaceChildren(...(back ? [h('button', { class: 'icon', 'aria-label': '返回', title: '返回', onclick: back }, icon('back', 18))] : []),
-      h('span', { class: 'pico', 'aria-hidden': 'true' }, icon(kindOf({ kind, name }).glyph, 22)),
+      h('span', { class: 'pico', 'aria-hidden': 'true' }, icon(shownKind().glyph, 22)),
       h('div', { class: 'grow' }, h('div', { class: 'pname truncate', title: path }, name), h('div', { class: 'pmeta caption secondary truncate' }, '属性')));
     if (failure !== null) body.replaceChildren(note('读不到属性', failure, { label: '重试', run: () => load() }));
     else if (reply === null) body.replaceChildren(h('div', { class: 'empty secondary' }, h('p', {}, '读取中…')));

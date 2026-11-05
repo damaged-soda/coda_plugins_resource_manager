@@ -405,6 +405,13 @@ test('内链接（按目标显示）：种类带「链接」，有「链接到�
   assert.equal((await ctx.host.requests('dir_size')).length, 1, '指向目录的内链接也统计（按目标）');
 });
 
+test('内链接的种类看目标的名字，不看链接自己叫什么：叫 latest-notes 的链接指向 notes.txt 是文本', async t => {
+  const ctx = await start(t);
+  ctx.host.answer(await openInfo(ctx, 'lnk'), { name: 'latest-notes', kind: 'file', link: true, target: 'docs/notes.txt', size: 5 });
+  await flush();
+  assert.equal(rows(ctx.page).种类, '文本（链接）');
+});
+
 test('外链接和失效的链接：只有自己的元数据，没有链接到，没有大小，不统计', async t => {
   const ctx = await start(t);
   ctx.host.answer(await openInfo(ctx, 'out'), { name: 'out', kind: 'link', link: true, mtimeMs: MTIME, mode: 0o777 });

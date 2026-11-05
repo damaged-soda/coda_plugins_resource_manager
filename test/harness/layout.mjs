@@ -498,9 +498,12 @@ try {
   // 长路径的行菜单：路径折很多行，菜单有高度上限，在菜单里滚动；iPhone 横屏滚到底，最后一项（属性）能点到。
   const expandDeep = async () => {
     for (const name of ['docs', LONG_DIR, LONG_SUB]) {
-      await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)}).click()`);
-      await until(`document.querySelectorAll('.row.dir[aria-expanded="true"]').length > 0 && ${name === LONG_SUB ? `[...document.querySelectorAll('.row')].some(r => r.textContent.includes(${JSON.stringify(DEEP_FILE)}))` : 'true'}`, `展开 ${name}`);
+      const row = `[...document.querySelectorAll('.row.dir')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)})`;
+      await until(`${row} !== undefined`, `目录树里有 ${name}`); // 上一层的子项读回来才有这一行
+      await evaluate(`${row}.click()`);
+      await until(`${row}?.getAttribute('aria-expanded') === 'true'`, `展开 ${name}`);
     }
+    await until(`[...document.querySelectorAll('.row')].some(r => r.textContent.includes(${JSON.stringify(DEEP_FILE)}))`, '最深的文件出现');
   };
   for (const [size, theme] of [['landscape', 'light'], ['portrait', 'dark']]) {
     await open(size, 'ios', theme);
