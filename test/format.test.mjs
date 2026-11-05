@@ -1,7 +1,7 @@
-// view/format.mjs：大小、相对日期、完整日期、排序文字。日期都用本地时间构造，和时区、语言设置无关。
+// view/format.mjs：大小、相对日期、完整日期、排序名称。日期都用本地时间构造，和时区、语言设置无关。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateText, formatDate, formatFullDate, formatSize, infoText, sizeText, sortAria } from '../view/format.mjs';
+import { dateText, formatDate, formatFullDate, formatSize, infoText, sizeText, sortName } from '../view/format.mjs';
 
 const at = (...parts) => new Date(...parts).getTime();
 
@@ -40,9 +40,6 @@ test('大小、日期、信息行：读不到的部分是 —，文件夹没有�
   assert.equal(sizeText({ kind: 'file', size: 0 }), '0 B', '0 字节是有大小的');
 });
 
-test('sortAria：排序：日期，降序', () => {
-  assert.equal(sortAria({ key: 'date', desc: true }), '排序：日期，降序');
-  assert.equal(sortAria({ key: 'name', desc: false }), '排序：名称，升序');
-  assert.equal(sortAria({ key: 'kind', desc: false }), '排序：种类，升序');
-  assert.equal(sortAria({ key: 'size', desc: true }), '排序：大小，降序');
+test('sortName：四种排序的菜单文字', () => {
+  assert.deepEqual(['name', 'kind', 'date', 'size'].map(sortName), ['名称', '种类', '日期', '大小']);
 });

@@ -43,7 +43,7 @@ const list = (view, body) => {
   view.send({ type: 'list', generation: 1, requestId, cursor: null, ...body });
   return requestId;
 };
-const BY_DATE = { key: 'date', desc: false };
+const BY_DATE = 'date';
 
 test('refresh：进行中的第一页读取不再被共用，同身份的新请求重新读，拿到的是新内容', async t => {
   const root = await tempDir(t);

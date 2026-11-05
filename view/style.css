@@ -43,11 +43,8 @@ p { margin: 0; }
 
 /* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。
    Mac 是侧栏列表：左右缩进 8 点，行有圆角，选中用 --coda-selection。 */
-/* 标题行：根目录名和排序按钮，滚动时吸在顶部。它在滚动容器里占着自己的高度，tree.mjs 把 spacer 的 offsetTop 扣掉。 */
-.section { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px;
-  font-size: .85em; font-weight: 600; color: var(--coda-secondary, #6e6e73); background: var(--coda-background, #fff); cursor: default; }
-.section .sort { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 2px 6px; border-radius: var(--coda-radius, 6px); font-weight: 500; white-space: nowrap; }
-.section .sort svg { display: block; }
+/* 标题行：根目录名，随内容滚走。它在滚动容器里占着自己的高度，tree.mjs 把 spacer 的 offsetTop 扣掉。 */
+.section { padding: 10px 16px 4px; font-size: .85em; font-weight: 600; color: var(--coda-secondary, #6e6e73); cursor: default; }
 /* 行宽按 #tree 的宽度查询：窄于约 220 点时 Mac 的 meta 不显示。 */
 #tree { container: tree / inline-size; }
 .spacer { position: relative; margin: 0 8px; }
@@ -95,13 +92,16 @@ button.icon svg { display: block; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
 #notice:focus { outline: none; }
-.menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
+.menu { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - var(--safe-left) - var(--safe-right) - 8px)); padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff)); }
 .menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
 .check { flex: none; display: grid; place-items: center; width: 16px; color: var(--coda-accent, #0a84ff); }
 .check svg { display: block; }
-.menu-path { max-width: 280px; padding: 4px 10px 6px; overflow-wrap: anywhere; }
-.menu-info { max-width: 280px; padding: 0 10px 6px; margin-top: -4px; overflow-wrap: anywhere; }
+/* 菜单宽度随内容，上限见 .menu：路径超过上限折行，大小 · 完整修改时间不折。 */
+.menu-path { padding: 4px 10px 6px; overflow-wrap: anywhere; }
+.menu-info { padding: 0 10px 6px; margin-top: -4px; white-space: nowrap; }
+.menu-sep { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
+.menu-head { padding: 4px 10px 2px; font-weight: 600; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
 .hint { position: fixed; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 10;
@@ -110,7 +110,7 @@ button.icon svg { display: block; }
 
 /* 悬停只在有鼠标时：触摸后不会留着。 */
 @media (hover: hover) {
-  .bar button:hover, button.icon:hover, .section .sort:hover { background: var(--hover); }
+  .bar button:hover, button.icon:hover { background: var(--hover); }
   .row.entry:hover { background: var(--hover); }
   .row.entry.sel:hover { background: var(--coda-selection, var(--hover)); }
   .menu button:hover { background: var(--coda-selection, var(--hover)); }
@@ -147,6 +147,7 @@ button.icon svg { display: block; }
 .coda-ios .phead button { padding: 0 8px; }
 .coda-ios .code { font-size: .8em; } /* 窄屏多看些：17 点下约 13.6 点 */
 .coda-ios .menu button { padding: 0 12px; }
+.coda-ios .menu-head { padding: 6px 12px 2px; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
 .bar .exit { display: none; }

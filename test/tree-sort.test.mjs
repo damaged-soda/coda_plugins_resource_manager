@@ -12,7 +12,6 @@ import { deferred, tempDir, waitFor } from './support/fake.mjs';
 const names = page => page.entries.map(entry => entry.name);
 const code = c => error => error.code === c;
 const T0 = 1_700_000_000; // 修改时间（秒）；带小数，验证取整
-const sorted = (key, desc) => ({ key, desc });
 // 小到每页大约只放一条（至少一条）。
 const TINY = ENVELOPE_BYTES + 1;
 
@@ -46,27 +45,22 @@ async function sample(t) {
   return root;
 }
 
-test('排序：四种键加升降序，文件夹始终在前，文件夹不随升降序反向（除名称、日期）', async t => {
+test('排序：每种键的方向固定（名称、种类升序，日期、大小降序），文件夹始终在前', async t => {
   const root = await sample(t);
+  // 文件夹 zdir 的日期 +5、adir +9；文件 big +1、mid +3、small +2、noext +4；大小 300、200、100、400。
   const expect = {
-    'name:false': ['adir', 'zdir', 'big.TXT', 'mid.md', 'noext', 'small.txt'],
-    'name:true': ['zdir', 'adir', 'small.txt', 'noext', 'mid.md', 'big.TXT'],
-    'kind:false': ['adir', 'zdir', 'noext', 'mid.md', 'big.TXT', 'small.txt'],
-    'kind:true': ['adir', 'zdir', 'big.TXT', 'small.txt', 'mid.md', 'noext'],
-    'date:false': ['zdir', 'adir', 'big.TXT', 'small.txt', 'mid.md', 'noext'],
-    'date:true': ['adir', 'zdir', 'noext', 'mid.md', 'small.txt', 'big.TXT'],
-    'size:false': ['adir', 'zdir', 'small.txt', 'mid.md', 'big.TXT', 'noext'],
-    'size:true': ['adir', 'zdir', 'noext', 'big.TXT', 'mid.md', 'small.txt'],
+    name: ['adir', 'zdir', 'big.TXT', 'mid.md', 'noext', 'small.txt'],
+    kind: ['adir', 'zdir', 'noext', 'mid.md', 'big.TXT', 'small.txt'],
+    date: ['adir', 'zdir', 'noext', 'mid.md', 'small.txt', 'big.TXT'],
+    size: ['adir', 'zdir', 'noext', 'big.TXT', 'mid.md', 'small.txt'],
   };
-  for (const [name, order] of Object.entries(expect)) {
-    const [key, desc] = name.split(':');
-    assert.deepEqual(await flat(root, '', sorted(key, desc === 'true')), order, name);
-  }
+  for (const [key, order] of Object.entries(expect)) assert.deepEqual(await flat(root, '', key), order, key);
+  assert.deepEqual(await flat(root, ''), expect.name, '不带 sort 是名称');
 });
 
 test('条目带整数 size（只有文件）和向下取整的 mtimeMs；文件夹只有 mtimeMs', async t => {
   const root = await sample(t);
-  const { entries } = (await pagesOf(root, '', sorted('size', false)))[0];
+  const { entries } = (await pagesOf(root, '', 'size'))[0];
   const byName = Object.fromEntries(entries.map(entry => [entry.name, entry]));
   assert.deepEqual(byName.adir, { name: 'adir', kind: 'dir', mtimeMs: (T0 + 9) * 1000 + 789 });
   assert.deepEqual(byName['small.txt'], { name: 'small.txt', kind: 'file', size: 100, mtimeMs: (T0 + 2) * 1000 + 789 });
@@ -78,18 +72,15 @@ test('缺元数据的不管升降序都排在组内最后，不当成 0', async 
   await file(root, 'zero', 0, 5); await file(root, 'one', 1, 1); await file(root, 'gone', 50, 9);
   const missing = countingFs({ hooks: { lstat: (path, original) => (path.endsWith('gone') ? Promise.reject(new Error('没权限')) : original(path)) } });
   for (const key of ['size', 'date']) {
-    for (const desc of [false, true]) {
-      const listing = createListing({ fs: missing.fs });
-      const [page] = await pagesOf(root, '', sorted(key, desc), { listing });
-      assert.equal(names(page).at(-1), 'gone', `${key} ${desc}`);
-      assert.deepEqual(page.entries.at(-1), { name: 'gone', kind: 'file' });
-    }
+    const [page] = await pagesOf(root, '', key, { listing: createListing({ fs: missing.fs }) });
+    assert.equal(names(page).at(-1), 'gone', key);
+    assert.deepEqual(page.entries.at(-1), { name: 'gone', kind: 'file' });
   }
-  const [page] = await pagesOf(root, '', sorted('size', false), { listing: createListing({ fs: missing.fs }) });
-  assert.deepEqual(names(page), ['zero', 'one', 'gone'], '大小 0 的排最前，缺的不是 0');
+  const [page] = await pagesOf(root, '', 'size', { listing: createListing({ fs: missing.fs }) });
+  assert.deepEqual(names(page), ['one', 'zero', 'gone'], '大小降序：1 在 0 前面，缺的不是 0，排最后');
 });
 
-test('相同键按名字（不分大小写）升序，再按原名，不随升降序反向', async t => {
+test('相同键按名字（不分大小写）升序，再按原名，降序的排序也一样', async t => {
   // 只名字大小写不同的文件在 macOS 上建不出来，所以用假的目录项和 lstat。
   const dirent = name => ({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false });
   const info = size => ({ isFile: () => true, isDirectory: () => false, size, mtimeMs: 1000 });
@@ -99,18 +90,17 @@ test('相同键按名字（不分大小写）升序，再按原名，不随升�
     lstat: async path => info(sizes[path.split('/').pop()]),
   } });
   const root = await tempDir(t);
-  const ask = (key, desc) => flat(root, '', sorted(key, desc), { listing: createListing({ fs: spy.fs }) });
-  assert.deepEqual(await ask('size', false), ['A', 'a', 'B', 'b', 'c']);
-  assert.deepEqual(await ask('size', true), ['c', 'A', 'a', 'B', 'b']);
-  assert.deepEqual(await ask('date', true), ['A', 'a', 'B', 'b', 'c']);
+  const ask = key => flat(root, '', key, { listing: createListing({ fs: spy.fs }) });
+  assert.deepEqual(await ask('size'), ['c', 'A', 'a', 'B', 'b'], '大小降序：9 在前，平手的 7 按名字升序');
+  assert.deepEqual(await ask('date'), ['A', 'a', 'B', 'b', 'c'], '日期全相同，只按名字');
 });
 
-test('invalid_sort：形状不对一律拒绝；不带 sort 是名称升序', async t => {
+test('invalid_sort：不是四种键之一一律拒绝（含带方向的旧形状）；不带 sort 是名称', async t => {
   const root = await sample(t);
-  for (const sort of [{ key: 'color', desc: false }, { key: 'size' }, { key: 'size', desc: 'yes' }, 'size', 7, [], { desc: true }]) {
+  for (const sort of ['color', '', 'Size', { key: 'size', desc: true }, { key: 'name', desc: false }, 7, [], true]) {
     await assert.rejects(listDirectory(root, '', null, { sort }), code('invalid_sort'), JSON.stringify(sort));
   }
-  assert.deepEqual(names(await listDirectory(root, '')), names(await listDirectory(root, '', null, { sort: sorted('name', false) })));
+  assert.deepEqual(names(await listDirectory(root, '')), names(await listDirectory(root, '', null, { sort: 'name' })));
 });
 
 test('一页不超字节上限：带上元数据，四种排序、很长的名字，每页整条回答都不超 96 KiB', async t => {
@@ -118,7 +108,7 @@ test('一页不超字节上限：带上元数据，四种排序、很长的名�
   for (let i = 0; i < 1500; i++) await file(root, `${i % 2 ? '"'.repeat(100) : '😀'.repeat(30)}${String(i).padStart(4, '0')}`, i * 1e6, i);
   const bytes = page => Buffer.byteLength(JSON.stringify({ type: 'listed', generation: 12345, requestId: 'r'.repeat(64), ...page }));
   for (const key of ['name', 'kind', 'date', 'size']) {
-    const pages = await pagesOf(root, '', sorted(key, true));
+    const pages = await pagesOf(root, '', key);
     assert.ok(pages.length >= 3, key);
     for (const page of pages) assert.ok(bytes(page) <= PAGE_BYTES, `${key}：${bytes(page)} 字节`);
     assert.equal(new Set(pages.flatMap(names)).size, 1500, key);
@@ -129,7 +119,7 @@ test('名称、种类的游标：翻页途中增删条目，不重复，也不�
   for (const key of ['name', 'kind']) {
     const root = await tempDir(t);
     for (let i = 0; i < 8; i++) await file(root, `f${i}.e${i % 2}`, 1);
-    const sort = sorted(key, false), options = { pageBytes: TINY + 150 };
+    const sort = key, options = { pageBytes: TINY + 150 };
     const first = await listDirectory(root, '', null, { ...options, sort });
     assert.ok(first.nextCursor && first.entries.length < 8, key);
     const last = first.entries.at(-1).name;
@@ -138,7 +128,7 @@ test('名称、种类的游标：翻页途中增删条目，不重复，也不�
     await file(root, 'f0a.e0', 1);
     const rest = [];
     for (let cursor = first.nextCursor; cursor;) {
-      const page = await listDirectory(root, '', cursor, { ...options, sort: sorted('size', true) }); // 请求里的 sort 被游标盖过
+      const page = await listDirectory(root, '', cursor, { ...options, sort: 'size' }); // 请求里的 sort 被游标盖过
       rest.push(...names(page)); cursor = page.nextCursor;
     }
     const all = [...names(first), ...rest];
@@ -152,13 +142,13 @@ test('快照：评审反例 a=10、b=20、c=30，第一页后 a→40、c→15，
   const root = await tempDir(t);
   await file(root, 'a', 10); await file(root, 'b', 20); await file(root, 'c', 30);
   const listing = createListing(), options = { listing, pageBytes: TINY };
-  const first = await listDirectory(root, '', null, { ...options, sort: sorted('size', false) });
-  assert.deepEqual(names(first), ['a']);
+  const first = await listDirectory(root, '', null, { ...options, sort: 'size' });
+  assert.deepEqual(names(first), ['c'], '大小降序，最大的在前');
   await file(root, 'a', 40); await file(root, 'c', 15);
   const second = await listDirectory(root, '', first.nextCursor, options);
   const third = await listDirectory(root, '', second.nextCursor, options);
-  assert.deepEqual([...names(first), ...names(second), ...names(third)], ['a', 'b', 'c']);
-  assert.deepEqual([first, second, third].map(page => page.entries[0].size), [10, 20, 30]);
+  assert.deepEqual([...names(first), ...names(second), ...names(third)], ['c', 'b', 'a']);
+  assert.deepEqual([first, second, third].map(page => page.entries[0].size), [30, 20, 10]);
   assert.equal(third.nextCursor, null);
 });
 
@@ -167,7 +157,7 @@ test('快照：第二页起不碰文件系统（连目录都删了也照常回�
   await mkdir(join(root, 'd'));
   for (let i = 0; i < 6; i++) await file(join(root, 'd'), `f${i}`, i, i);
   const spy = countingFs(), listing = createListing({ fs: spy.fs }), options = { listing, pageBytes: TINY + 100 };
-  const first = await listDirectory(root, 'd', null, { ...options, sort: sorted('date', true) });
+  const first = await listDirectory(root, 'd', null, { ...options, sort: 'date' });
   assert.ok(first.nextCursor);
   const after = { ...spy.counts };
   assert.deepEqual([after.readdir, after.lstat], [1, 6], '第一页读全部元数据');
@@ -184,7 +174,7 @@ test('快照：第二页起不碰文件系统（连目录都删了也照常回�
 test('快照：一页放得下的目录不建快照', async t => {
   const root = await sample(t);
   const listing = createListing();
-  const page = await listDirectory(root, '', null, { listing, sort: sorted('date', true) });
+  const page = await listDirectory(root, '', null, { listing, sort: 'date' });
   assert.equal(page.nextCursor, null);
   assert.equal(listing.snapshots.size, 0);
 });
@@ -194,13 +184,13 @@ test('快照：闲置 60 秒后游标过期；期间用过就重新计时', asyn
   for (let i = 0; i < 4; i++) await file(root, `f${i}`, i);
   const time = { at: 0 }, options = () => ({ listing: createListing({ snapshots: createSnapshots({ now: () => time.at }) }), pageBytes: TINY });
   const a = options();
-  const first = await listDirectory(root, '', null, { ...a, sort: sorted('size', false) });
+  const first = await listDirectory(root, '', null, { ...a, sort: 'size' });
   time.at += 50_000;
   const second = await listDirectory(root, '', first.nextCursor, a);
   time.at += 50_000;
   assert.ok(await listDirectory(root, '', second.nextCursor, a), '距上次用只有 50 秒');
   const b = options();
-  const early = await listDirectory(root, '', null, { ...b, sort: sorted('size', false) });
+  const early = await listDirectory(root, '', null, { ...b, sort: 'size' });
   time.at += 60_001;
   await assert.rejects(listDirectory(root, '', early.nextCursor, b), code('cursor_expired'));
   assert.equal(b.listing.snapshots.size, 0);
@@ -213,7 +203,7 @@ test('快照：数量上限，第 9 个把最久没用的挤掉，它的游标�
   for (let d = 0; d < 9; d++) {
     await mkdir(join(root, `d${d}`));
     for (let i = 0; i < 3; i++) await file(join(root, `d${d}`), `f${i}`, i);
-    cursors.push((await listDirectory(root, `d${d}`, null, { ...options, sort: sorted('size', false) })).nextCursor);
+    cursors.push((await listDirectory(root, `d${d}`, null, { ...options, sort: 'size' })).nextCursor);
   }
   assert.equal(listing.snapshots.size, 8);
   await assert.rejects(listDirectory(root, 'd0', cursors[0], options), code('cursor_expired'));
@@ -226,11 +216,11 @@ test('快照：新的第一页替换同身份的旧快照，旧游标过期；�
   for (const dir of [root, other]) { await mkdir(join(dir, 'd'), { recursive: true }); for (let i = 0; i < 3; i++) await file(join(dir, 'd'), `f${i}`, i); }
   await mkdir(join(root, 'e')); await file(join(root, 'e'), 'x', 1); await file(join(root, 'e'), 'y', 1);
   const listing = createListing(), options = { listing, pageBytes: TINY };
-  const old = (await listDirectory(root, 'd', null, { ...options, sort: sorted('size', true) })).nextCursor;
-  const fresh = (await listDirectory(root, 'd', null, { ...options, sort: sorted('size', true) })).nextCursor;
+  const old = (await listDirectory(root, 'd', null, { ...options, sort: 'size' })).nextCursor;
+  const fresh = (await listDirectory(root, 'd', null, { ...options, sort: 'size' })).nextCursor;
   await assert.rejects(listDirectory(root, 'd', old, options), code('cursor_expired'));
-  assert.deepEqual(names(await listDirectory(root, 'd', fresh, { ...options, sort: sorted('name', false) })), ['f1'], '按快照的大小降序，不按请求里的名称');
-  const again = (await listDirectory(root, 'd', null, { ...options, sort: sorted('size', true) })).nextCursor;
+  assert.deepEqual(names(await listDirectory(root, 'd', fresh, { ...options, sort: 'name' })), ['f1'], '按快照的大小降序，不按请求里的名称');
+  const again = (await listDirectory(root, 'd', null, { ...options, sort: 'size' })).nextCursor;
   await assert.rejects(listDirectory(root, 'e', again, options), code('cursor_expired'), '目录对不上');
   await assert.rejects(listDirectory(other, 'd', again, options), code('cursor_expired'), '根目录对不上');
   assert.ok(await listDirectory(root, './d/', again, options), '同一目录的另一种写法认得');
@@ -239,7 +229,7 @@ test('快照：新的第一页替换同身份的旧快照，旧游标过期；�
 test('游标格式不对、下标越界都是 cursor_expired', async t => {
   const root = await sample(t);
   const bad = value => Buffer.from(JSON.stringify(value)).toString('base64url');
-  for (const cursor of ['???', bad([]), bad(['s', 1]), bad(['s', 1, 0]), bad(['s', 1, 99]), bad(['k', 'date', 0, 0, 'a']), bad(['k', 'name', 2, 0, 'a']), bad(['k', 'name', 0, 5, 'a']), bad({})]) {
+  for (const cursor of ['???', bad([]), bad(['s', 1]), bad(['s', 1, 0]), bad(['s', 1, 99]), bad(['k', 'date', 0, 'a']), bad(['k', 'name', 2, 'a']), bad(['k', 'name', 0, 1, 'a']), bad(['k', 'name', 1, 'a', 'x']), bad({})]) {
     await assert.rejects(listDirectory(root, '', cursor), code('cursor_expired'), cursor);
   }
 });
@@ -252,7 +242,7 @@ test('上限：20,000 条仍按日期；20,001 条回 sortFallback 按名称；�
   };
   await make(0, 20_000);
   const spy = countingFs(), listing = createListing({ fs: spy.fs });
-  const first = await listDirectory(root, '', null, { listing, sort: sorted('date', false) });
+  const first = await listDirectory(root, '', null, { listing, sort: 'date' });
   assert.equal(first.sortFallback, undefined);
   assert.equal(spy.counts.lstat, 20_000);
   assert.ok(first.entries.every(entry => Number.isInteger(entry.mtimeMs)));
@@ -266,14 +256,14 @@ test('上限：20,000 条仍按日期；20,001 条回 sortFallback 按名称；�
   assert.equal(spy.counts.lstat, 20_000, '翻页没有再读');
   // 下一次第一页才退回名称，并且只读这一页的元数据。
   const lstatBefore = spy.counts.lstat;
-  const fallback = await listDirectory(root, '', null, { listing, sort: sorted('size', true) });
+  const fallback = await listDirectory(root, '', null, { listing, sort: 'size' });
   assert.equal(fallback.sortFallback, true);
   assert.equal(fallback.entries[0].name, 'f00000');
   assert.equal(spy.counts.lstat - lstatBefore, fallback.entries.length, '退回名称后只读这一页的元数据');
   assert.ok(fallback.nextCursor && !(await listDirectory(root, '', fallback.nextCursor, { listing })).sortFallback, '只有第一页带 sortFallback');
   assert.equal(listing.snapshots.size, 0);
   for (const key of ['name', 'kind']) {
-    const page = await listDirectory(root, '', null, { sort: sorted(key, false) });
+    const page = await listDirectory(root, '', null, { sort: key });
     assert.equal(page.sortFallback, undefined, key);
     assert.ok(page.entries.length > 100);
   }
@@ -284,13 +274,13 @@ test('读取量：名称、种类只读当前页的元数据；日期、大小�
   for (let i = 0; i < 300; i++) await file(root, `f${String(i).padStart(3, '0')}`, i);
   for (const key of ['name', 'kind']) {
     const spy = countingFs();
-    const page = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted(key, false), pageBytes: ENVELOPE_BYTES + 3000 });
+    const page = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: key, pageBytes: ENVELOPE_BYTES + 3000 });
     assert.ok(page.nextCursor);
     assert.equal(spy.counts.lstat, page.entries.length, key);
     assert.ok(page.entries.length < 100);
   }
   const spy = countingFs();
-  await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted('size', false) });
+  await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: 'size' });
   assert.equal(spy.counts.lstat, 300);
 });
 
@@ -299,7 +289,7 @@ test('并发：8 个目录同时读，同时在读的不超过 8（日期和名�
   for (let d = 0; d < 8; d++) { await mkdir(join(root, `d${d}`)); for (let i = 0; i < 60; i++) await file(join(root, `d${d}`), `f${i}`, i); }
   for (const key of ['date', 'name']) {
     const spy = countingFs(), listing = createListing({ fs: spy.fs });
-    await Promise.all(Array.from({ length: 8 }, (_, d) => listDirectory(root, `d${d}`, null, { listing, sort: sorted(key, false), pageBytes: PAGE_BYTES })));
+    await Promise.all(Array.from({ length: 8 }, (_, d) => listDirectory(root, `d${d}`, null, { listing, sort: key, pageBytes: PAGE_BYTES })));
     assert.equal(spy.peak, 8, `${key}：峰值 ${spy.peak}`);
   }
 });
@@ -311,7 +301,7 @@ test('并发：目录里的链接解析（realpath、stat）也算在同一个�
     for (let i = 0; i < 30; i++) await symlink(join(root, `target${d}`), join(root, `d${d}`, `l${i}`));
   }
   const spy = countingFs(), listing = createListing({ fs: spy.fs });
-  await Promise.all(Array.from({ length: 4 }, (_, d) => listDirectory(root, `d${d}`, null, { listing, sort: sorted('size', false) })));
+  await Promise.all(Array.from({ length: 4 }, (_, d) => listDirectory(root, `d${d}`, null, { listing, sort: 'size' })));
   assert.equal(spy.peak, 8);
 });
 
@@ -320,7 +310,7 @@ test('同身份的第一页并发共用一次读取；detach 之后不再共用'
   const gate = deferred();
   const spy = countingFs({ hooks: { readdir: async (...args) => { const original = args.pop(); await gate.promise; return original(...args); } } });
   const listing = createListing({ fs: spy.fs });
-  const ask = () => listDirectory(root, '', null, { listing, sort: sorted('date', true) });
+  const ask = () => listDirectory(root, '', null, { listing, sort: 'date' });
   const a = ask(), b = ask();
   await waitFor(() => spy.counts.readdir > 0, 'readdir');
   assert.equal(spy.counts.readdir, 1);
@@ -335,7 +325,7 @@ test('同身份的第一页并发共用一次读取；detach 之后不再共用'
   await ask();
   assert.equal(spy.counts.readdir, 3, '上一次读完了，不再共用');
   const other = createListing({ fs: spy.fs }); // 不同排序也不共用
-  await Promise.all([listDirectory(root, '', null, { listing: other, sort: sorted('date', true) }), listDirectory(root, '', null, { listing: other, sort: sorted('size', true) })]);
+  await Promise.all([listDirectory(root, '', null, { listing: other, sort: 'date' }), listDirectory(root, '', null, { listing: other, sort: 'size' })]);
   assert.equal(spy.counts.readdir, 5);
 });
 
@@ -346,7 +336,7 @@ test('同身份的旧读取晚到：只有最新发起的读取存快照，新�
   let calls = 0;
   const spy = countingFs({ hooks: { readdir: async (...args) => { const original = args.pop(); if (calls++ === 0) await gate.promise; return original(...args); } } });
   const listing = createListing({ fs: spy.fs });
-  const ask = cursor => listDirectory(root, '', cursor, { listing, sort: sorted('size', false), pageBytes: TINY });
+  const ask = cursor => listDirectory(root, '', cursor, { listing, sort: 'size', pageBytes: TINY });
   const old = ask(null);
   await waitFor(() => spy.counts.readdir === 1, '旧读取卡在 readdir');
   listing.detach(); // refresh、changed：不再共用，新请求重新读
@@ -358,7 +348,7 @@ test('同身份的旧读取晚到：只有最新发起的读取存快照，新�
   assert.equal(listing.snapshots.size, 1, '旧读取没有顶掉新快照');
   assert.deepEqual(names(late), names(fresh), '旧读取的回答照常返回');
   const second = await ask(fresh.nextCursor);
-  assert.deepEqual(names(second), ['f1']);
+  assert.deepEqual(names(second), ['f2']);
   await assert.rejects(ask(late.nextCursor), code('cursor_expired'));
   assert.equal(listing.latest.size, 0, '读完不留记录');
 });
@@ -370,7 +360,7 @@ test('根目录：读的途中根目录换了，不存快照，也不回答内�
   const spy = countingFs({ hooks: { readdir: async (...args) => { const original = args.pop(); await gate.promise; return original(...args); } } });
   const listing = createListing({ fs: spy.fs });
   let current = true;
-  const read = listDirectory(root, '', null, { listing, sort: sorted('size', false), pageBytes: TINY, valid: () => current });
+  const read = listDirectory(root, '', null, { listing, sort: 'size', pageBytes: TINY, valid: () => current });
   await waitFor(() => spy.counts.readdir === 1, 'readdir');
   current = false; // 同一会话下根目录从 A 换到了 B
   gate.resolve();
@@ -389,7 +379,7 @@ test('越界：不跟随链接。指向外面的链接不带元数据；link: tr
   await symlink('nowhere', join(root, 'dangling'));
   for (const key of ['name', 'date']) {
     const spy = countingFs();
-    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted(key, false) });
+    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: key });
     const byName = Object.fromEntries(entries.map(entry => [entry.name, entry]));
     assert.deepEqual(byName['to-outside'], { name: 'to-outside', kind: 'link' }, key);
     assert.deepEqual(byName.dangling, { name: 'dangling', kind: 'link' }, key);
@@ -413,7 +403,7 @@ test('越界：readdir 之后条目被换成指向外面的链接，读元数据
   for (const [key, bytes] of [['date', PAGE_BYTES], ['name', PAGE_BYTES]]) {
     await rm(join(root, 'swap.txt'), { force: true }); await file(root, 'swap.txt', 1);
     const spy = countingFs({ hooks: { readdir: swap } });
-    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted(key, false), pageBytes: bytes });
+    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: key, pageBytes: bytes });
     const swapped = entries.find(entry => entry.name === 'swap.txt');
     assert.deepEqual(swapped, { name: 'swap.txt', kind: 'file' }, key);
     assert.ok(!JSON.stringify(entries).includes('99999'), key);
@@ -436,7 +426,7 @@ test('越界：realpath 校验之后目标被换成指向外面的链接，回�
       return result;
     };
     const spy = countingFs({ hooks: { realpath: swap } });
-    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: sorted(key, false) });
+    const { entries } = await listDirectory(root, '', null, { listing: createListing({ fs: spy.fs }), sort: key });
     assert.deepEqual(entries.find(entry => entry.name === 'alias'), { name: 'alias', kind: 'link' }, key);
     assert.ok(!JSON.stringify(entries).includes('99999') && !JSON.stringify(entries).includes(String(1_700_000_077)), key);
   }

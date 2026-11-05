@@ -19,110 +19,129 @@ const listing = {
 };
 const persisted = (sort, sessions = {}) => ({ v: 1, seq: 1, hidden: false, sort, sessions });
 const record = (tree, sort) => ({ at: 1, expanded: [], selected: null, scroll: { tree, top: 0, left: 0, sort } });
-const NAME = { key: 'name', desc: false }, DATE = { key: 'date', desc: true };
+const NAME = 'name', DATE = 'date';
 
-async function start(t, { platform = 'mac', state, coda = {}, session = ['s1', '/work/demo'] } = {}) {
-  const ctx = await openTree(t, { platform, listing, state, coda });
+// 排序在「更多」菜单里：Mac 是原生按钮（测试里按 { id: 'more' } 触发），iPhone 是页内工具条的 ⋯。
+async function start(t, { platform = 'mac', state, coda = {}, session = ['s1', '/work/demo'], settle = true } = {}) {
+  const events = {};
+  const ctx = await openTree(t, { platform, listing, state, coda: { toolbar: () => {}, on: (name, fn) => { events[name] = fn; }, ...coda } });
   ctx.host.session(...session);
-  await flush();
-  return ctx;
+  if (settle) await flush();
+  const moreButton = () => ctx.page.bar.find(node => node.getAttribute('aria-label') === '更多')[0];
+  return { ...ctx, events, more: () => (platform === 'ios' ? moreButton().dispatch('click') : events.toolbar({ id: 'more' })) };
 }
 const part = (node, cls) => node.find(child => child.classList.contains(cls))[0];
-const macSort = page => part(page.tree, 'sort');
-const phoneSort = page => page.bar.find(node => node.tagName === 'BUTTON' && node.getAttribute('aria-label')?.startsWith('排序'))[0];
 const items = page => page.menu.find(node => node.tagName === 'BUTTON');
 const item = (page, text) => items(page).find(node => node.textContent === text);
 const lastSort = host => host.lists().at(-1).sort;
+// 打开 ⋯ 菜单选一项，等重取回来。
+async function choose(ctx, label) {
+  ctx.more();
+  item(ctx.page, label).dispatch('click');
+  await flush();
+}
+const SORTS = ['名称', '种类', '日期', '大小'];
+const checked = page => items(page).filter(node => node.getAttribute('aria-checked') === 'true').map(node => node.textContent);
 
-test('Mac 排序控件：在标题行根目录名右边，图标加当前排序名，可访问名称写全', async t => {
-  const { page } = await start(t);
-  const title = page.tree.children[0], button = macSort(page);
-  assert.ok(title.classList.contains('section'));
-  assert.equal(title.children[0], part(title, 'section-name'));
-  assert.equal(title.children[1], button, '排序在根目录名之后');
-  assert.equal(button.textContent, '名称');
-  assert.ok(button.find(node => node.tagName === 'SVG').length > 0, '有图标');
-  assert.equal(button.getAttribute('aria-label'), '排序：名称，升序');
-  assert.equal(button.title, '排序：名称，升序');
-  assert.equal(button.getAttribute('aria-haspopup'), 'menu');
-});
+for (const platform of ['mac', 'ios']) {
+  const side = platform === 'mac' ? 'Mac' : 'iPhone';
 
-test('排序菜单：四项，当前项有对勾和方向箭头；选当前项反向，选别的项用它的默认方向；控件和请求跟着变', async t => {
-  const { page, host } = await start(t);
-  const button = macSort(page);
-  button.dispatch('click');
-  assert.ok(visible(page.menu));
-  assert.deepEqual(items(page).map(node => node.textContent), ['名称 ↑', '种类', '日期', '大小']);
-  assert.deepEqual(items(page).map(node => node.getAttribute('aria-checked')), ['true', 'false', 'false', 'false']);
-  assert.deepEqual(items(page).map(node => node.find(n => n.tagName === 'SVG').length), [1, 0, 0, 0], '只有当前项有对勾');
-  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  test(`${side} ⋯ 菜单：刷新、显示隐藏文件，分隔线，小标题「排序」，名称 / 种类 / 日期 / 大小，当前项有对勾`, async t => {
+    const ctx = await start(t, { platform });
+    const { page } = ctx;
+    ctx.more();
+    assert.ok(visible(page.menu));
+    assert.deepEqual(page.menu.children.map(node => node.tagName), ['BUTTON', 'BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'], '一条分隔线、一个小标题，其余是项');
+    assert.equal(page.menu.children[3].textContent, '排序');
+    assert.equal(page.menu.children[2].tagName, 'HR');
+    assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件', ...SORTS]);
+    assert.deepEqual(items(page).map(node => node.getAttribute('role')), ['menuitem', 'menuitemcheckbox', ...SORTS.map(() => 'menuitemradio')]);
+    assert.deepEqual(items(page).map(node => node.getAttribute('aria-checked')), [null, 'false', 'true', 'false', 'false', 'false']);
+    assert.deepEqual(items(page).map(node => node.find(n => n.tagName === 'SVG').length), [0, 0, 1, 0, 0, 0], '只有名称有对勾');
+    assert.deepEqual(items(page).map(node => node.children.length), Array(6).fill(2), '每一项都留对勾的位置，文字才对齐');
+    assert.equal(part(page.menu, 'menu-path'), undefined, '这个菜单没有路径标题');
+  });
 
-  const choose = async (text, expectSort, aria) => {
-    button.dispatch('click');
-    item(page, text).dispatch('click');
-    await flush();
+  test(`${side}：没有独立的排序按钮`, async t => {
+    const { page } = await start(t, { platform });
+    const isSort = node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent).includes('排序');
+    assert.equal(page.tree.find(node => node.tagName === 'BUTTON').length, 0, '标题行和目录树里没有按钮');
+    assert.deepEqual([...page.bar.find(isSort), ...page.tree.find(isSort)], []);
+    if (platform === 'ios') assert.deepEqual(page.bar.children.map(node => node.getAttribute('aria-label') ?? node.className.split(' ')[0]), ['exit', 'bar-title', '更多']);
+    assert.equal(part(page.tree, 'section').textContent, 'demo', 'Mac 的标题行只留根目录名');
+  });
+
+  test(`${side}：选当前项什么都不做，不重取、不滚动、不关掉别的状态；选别的项重取一次并回到顶部`, async t => {
+    const saved = [];
+    const ctx = await start(t, { platform, coda: { setState: value => saved.push(JSON.parse(JSON.stringify(value))) } });
+    const { page, host } = ctx;
+    page.tree.scrollTop = 77;
+    const before = host.lists().length;
+    await choose(ctx, '名称');
     assert.equal(visible(page.menu), false, '选完关闭');
-    assert.deepEqual(lastSort(host), expectSort, text);
-    assert.equal(button.getAttribute('aria-label'), aria);
-  };
-  button.dispatch('click'); // 关掉上面开着的
-  await choose('名称 ↑', { key: 'name', desc: true }, '排序：名称，降序');
-  await choose('名称 ↓', { key: 'name', desc: false }, '排序：名称，升序');
-  await choose('日期', { key: 'date', desc: true }, '排序：日期，降序');
-  assert.equal(button.textContent, '日期');
-  await choose('日期 ↓', { key: 'date', desc: false }, '排序：日期，升序');
-  await choose('大小', { key: 'size', desc: true }, '排序：大小，降序');
-  await choose('种类', { key: 'kind', desc: false }, '排序：种类，升序');
-  button.dispatch('click');
-  assert.deepEqual(items(page).map(node => node.textContent), ['名称', '种类 ↑', '日期', '大小']);
-});
+    assert.equal(host.lists().length, before, '没有新请求');
+    assert.equal(page.tree.scrollTop, 77, '没有滚动');
+    ctx.events.visibility(false);
+    assert.ok(saved.length > 0 && saved.every(state => state.sort === NAME), '保存的排序没变');
 
-test('排序菜单：同一个按钮再次激活是关闭（键盘没有 pointerdown），点菜单外只关菜单；按钮跨重画是同一个节点', async t => {
-  const { page } = await start(t);
-  const button = macSort(page);
-  button.dispatch('click');
-  assert.ok(visible(page.menu));
-  button.dispatch('click');
-  assert.equal(visible(page.menu), false);
-  assert.equal(button.getAttribute('aria-expanded'), 'false');
-  button.dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
-  assert.equal(macSort(page), button, '换排序后还是同一个节点');
-  button.dispatch('pointerdown', { pointerId: 1, isPrimary: true });
-  button.dispatch('click');
-  assert.ok(visible(page.menu), '没开着时按下是打开');
-  rowNamed(page, 'a.txt').dispatch('pointerdown', { pointerId: 1, isPrimary: true });
-  assert.equal(visible(page.menu), false, '点菜单外关闭');
-});
+    await choose(ctx, '日期');
+    const requests = host.lists().slice(before);
+    assert.deepEqual(requests.map(r => [r.path, r.sort]), [['', DATE]], '恰好一次重取，带新排序');
+    assert.equal(page.tree.scrollTop, 0, '回到顶部');
+    ctx.more();
+    assert.deepEqual(checked(page), ['日期'], '对勾跟着走');
+    ctx.more();
 
-test('启动：persisted.sort 读进模型，第一次请求就用它，控件也是它；换排序写回 persisted', async t => {
-  const saved = [], visibility = [];
-  const { page, host } = await start(t, { state: persisted(DATE), coda: { setState: value => saved.push(JSON.parse(JSON.stringify(value))), on: (name, fn) => { if (name === 'visibility') visibility.push(fn); } } });
-  assert.deepEqual(host.lists()[0].sort, DATE, '第一页请求就带着它');
-  assert.equal(macSort(page).getAttribute('aria-label'), '排序：日期，降序');
-  macSort(page).dispatch('click');
-  item(page, '大小').dispatch('click');
-  await flush();
-  visibility.forEach(fn => fn(false));
-  assert.deepEqual(saved.at(-1).sort, { key: 'size', desc: true });
-  assert.deepEqual(saved.at(-1).sessions.s1.scroll.sort, { key: 'size', desc: true }, '会话的滚动位置带上当时的排序');
-});
+    page.tree.scrollTop = 40;
+    await choose(ctx, '日期');
+    assert.equal(host.lists().length, before + 1, '再选日期还是什么都不做');
+    assert.equal(page.tree.scrollTop, 40);
+  });
+
+  test(`${side}：四个排序项依次选，请求带的就是它的键，没有方向`, async t => {
+    const ctx = await start(t, { platform });
+    for (const [label, key] of [['种类', 'kind'], ['日期', 'date'], ['大小', 'size'], ['名称', 'name']]) {
+      await choose(ctx, label);
+      assert.equal(lastSort(ctx.host), key, label);
+    }
+    assert.ok(ctx.host.lists().every(request => typeof request.sort === 'string'));
+  });
+
+  test(`${side}：启动时 persisted.sort 读进模型，第一次请求就用它，菜单的对勾也是它；换排序写回 persisted 和会话的滚动记录`, async t => {
+    const saved = [];
+    const ctx = await start(t, { platform, state: persisted(DATE), coda: { setState: value => saved.push(JSON.parse(JSON.stringify(value))) } });
+    const { page, host } = ctx;
+    assert.equal(host.lists()[0].sort, DATE, '第一页请求就带着它');
+    ctx.more();
+    assert.deepEqual(checked(page), ['日期']);
+    item(page, '大小').dispatch('click');
+    await flush();
+    ctx.events.visibility(false);
+    assert.equal(saved.at(-1).sort, 'size');
+    assert.equal(saved.at(-1).sessions.s1.scroll.sort, 'size', '会话的滚动位置带上当时的排序');
+  });
+
+  test(`${side}：0.4.0 测试版存过的 { key, desc } 形状：不崩，落回名称，菜单和请求都是名称`, async t => {
+    const old = { key: 'size', desc: true };
+    const { page, host, more } = await start(t, { platform, state: persisted(old, { s1: record(55, old) }) });
+    assert.equal(host.lists()[0].sort, NAME);
+    more();
+    assert.deepEqual(checked(page), ['名称']);
+    assert.equal(page.tree.scrollTop, 55, '滚动记录的排序同样落回名称，和现在一致，照常恢复');
+  });
+}
 
 test('Mac 行：meta 按日期排序显示日期，否则显示大小；文件夹的大小是 —；读不到是 —；不能打开的没有 meta', async t => {
-  const { page } = await start(t);
+  const ctx = await start(t);
+  const { page } = ctx;
   const meta = name => part(rowNamed(page, name), 'meta')?.textContent;
   assert.deepEqual(['src', 'a.txt', 'new.txt', 'bare.txt'].map(meta), ['—', '1.5 KiB', '12 B', '—']);
   assert.equal(part(rowNamed(page, 'gone'), 'meta'), undefined);
   assert.equal(part(rowNamed(page, 'gone'), 'sub'), undefined);
-  macSort(page).dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
+  await choose(ctx, '日期');
   assert.deepEqual(['src', 'a.txt', 'bare.txt'].map(meta), ['2020年3月', '2020年3月', '—']);
   assert.match(meta('new.txt'), /^\d\d:\d\d$/, '今天是时分');
-  macSort(page).dispatch('click');
-  item(page, '种类').dispatch('click');
-  await flush();
+  await choose(ctx, '种类');
   assert.equal(meta('a.txt'), '1.5 KiB', '种类也显示大小');
 });
 
@@ -172,63 +191,38 @@ test('长按菜单（iPhone）：同样的信息行', async t => {
   assert.notEqual(part(page.menu, 'menu-info'), part(page.menu, 'menu-path'));
 });
 
-test('iPhone 工具条：排序在根目录名和 ⋯ 之间，看到排序名，可访问名称写全；换排序工具条跟着重画', async t => {
-  const { page, host } = await start(t, { platform: 'ios' });
-  assert.deepEqual(page.bar.children.map(node => node.getAttribute('aria-label') ?? node.className.split(' ')[0]), ['exit', 'bar-title', '排序：名称，升序', '更多']);
-  const button = phoneSort(page);
-  assert.equal(button.textContent, '名称');
-  assert.equal(button.getAttribute('aria-haspopup'), 'menu');
-  button.dispatch('click');
-  assert.deepEqual(items(page).map(node => node.textContent), ['名称 ↑', '种类', '日期', '大小']);
-  item(page, '大小').dispatch('click');
-  await flush();
-  assert.deepEqual(lastSort(host), { key: 'size', desc: true });
-  assert.equal(phoneSort(page).getAttribute('aria-label'), '排序：大小，降序');
-  assert.equal(phoneSort(page).textContent, '大小');
-  assert.equal(visible(page.menu), false);
-  phoneSort(page).dispatch('click');
-  phoneSort(page).dispatch('click'); // 同一来源再次激活
-  assert.equal(visible(page.menu), false);
-});
-
-test('iPhone：排序菜单和 ⋯ 菜单互相替换，⋯ 仍是刷新和显示隐藏文件', async t => {
-  const { page } = await start(t, { platform: 'ios' });
-  phoneSort(page).dispatch('click');
-  const more = page.bar.find(node => node.getAttribute('aria-label') === '更多')[0];
-  more.dispatch('click');
-  assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件']);
-  assert.equal(phoneSort(page).getAttribute('aria-expanded'), 'false');
-});
-
 test('Mac 的工具栏不改：换排序不重新声明，仍只有「更多」', async t => {
   const declared = [];
-  const { page } = await start(t, { coda: { toolbar: items => declared.push(items) } });
+  const ctx = await start(t, { coda: { toolbar: items => declared.push(items) } });
   assert.deepEqual(declared, [[{ id: 'more', label: '更多', icon: 'ellipsis', kind: 'button' }]]);
-  macSort(page).dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
+  await choose(ctx, '日期');
   assert.equal(declared.length, 1);
+});
+
+test('iPhone 的 ⋯：再次激活只关闭；开着时 aria-expanded 为真', async t => {
+  const ctx = await start(t, { platform: 'ios' });
+  const more = ctx.page.bar.find(node => node.getAttribute('aria-label') === '更多')[0];
+  ctx.more();
+  assert.equal(more.getAttribute('aria-expanded'), 'true');
+  ctx.more();
+  assert.equal(visible(ctx.page.menu), false);
+  assert.equal(more.getAttribute('aria-expanded'), 'false');
 });
 
 // ---- 滚动位置 ----
 
 test('换排序：滚动回到顶部', async t => {
-  const { page } = await start(t);
-  page.tree.scrollTop = 77;
-  macSort(page).dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
-  assert.equal(page.tree.scrollTop, 0);
+  const ctx = await start(t);
+  ctx.page.tree.scrollTop = 77;
+  await choose(ctx, '日期');
+  assert.equal(ctx.page.tree.scrollTop, 0);
 });
 
 test('恢复途中换排序：待恢复的位置作废，不会跳回旧位置', async t => {
   const state = persisted(NAME, { s1: record(120, NAME) });
-  const { page, host } = await openTree(t, { platform: 'mac', listing, state });
-  host.session('s1', '/work/demo'); // 目录还没取回，恢复在等
-  macSort(page).dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
-  assert.equal(page.tree.scrollTop, 0);
+  const ctx = await start(t, { state, settle: false }); // 目录还没取回，恢复在等
+  await choose(ctx, '日期');
+  assert.equal(ctx.page.tree.scrollTop, 0);
 });
 
 test('恢复：排序和保存时一致才恢复滚动位置，对不上回到顶部', async t => {
@@ -243,10 +237,9 @@ test('恢复：排序和保存时一致才恢复滚动位置，对不上回到�
 
 test('在 A 会话换了排序，再回到 B：B 保存的旧位置作废', async t => {
   const state = persisted(NAME, { s2: record(90, NAME) });
-  const { page, host } = await start(t, { platform: 'mac', state, session: ['s1', '/work/a'] });
-  macSort(page).dispatch('click');
-  item(page, '日期').dispatch('click');
-  await flush();
+  const ctx = await start(t, { platform: 'mac', state, session: ['s1', '/work/a'] });
+  const { page, host } = ctx;
+  await choose(ctx, '日期');
   host.session('s2', '/work/b');
   await flush();
   assert.equal(page.tree.scrollTop, 0);

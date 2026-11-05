@@ -34,12 +34,3 @@ export const infoText = entry => `${sizeText(entry)} · ${Number.isInteger(entry
 
 const NAMES = { [SortKey.NAME]: '名称', [SortKey.KIND]: '种类', [SortKey.DATE]: '日期', [SortKey.SIZE]: '大小' };
 export const sortName = key => NAMES[key];
-export const sortOrder = desc => (desc ? '降序' : '升序');
-export const sortArrow = desc => (desc ? '↓' : '↑');
-// 可访问名称：排序：日期，降序。
-export const sortAria = ({ key, desc }) => `排序：${NAMES[key]}，${sortOrder(desc)}`;
-
-// 选一个排序键后的排序：选当前项是反向，选别的项用它的默认方向（名称、种类升序，日期、大小降序）。
-export const nextSort = (current, key) => ({
-  key, desc: key === current.key ? !current.desc : key === SortKey.DATE || key === SortKey.SIZE,
-});

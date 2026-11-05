@@ -18,16 +18,16 @@ async function ready(t, listing = ['src/', 'a.txt']) {
 test('请求带当前排序，默认名称升序；setSort 换排序后重取根和已展开的目录，每个目录一次替换', async () => {
   const t = manual();
   await ready(t);
-  assert.deepEqual(t.sent.at(-1).sort, { key: 'name', desc: false });
+  assert.equal(t.sent.at(-1).sort, 'name');
   t.model.toggle('src');
   t.reply((await t.lists('src'))[0], entries(['x', 'y']));
   await flush();
   const start = t.sent.length;
-  t.model.setSort({ key: 'date', desc: true });
-  assert.deepEqual(t.model.sort, { key: 'date', desc: true });
+  t.model.setSort('date');
+  assert.equal(t.model.sort, 'date');
   const requests = (await t.lists()).slice(start);
   assert.deepEqual(requests.map(r => r.path).sort(), ['', 'src']);
-  for (const request of requests) assert.deepEqual(request.sort, { key: 'date', desc: true });
+  for (const request of requests) assert.equal(request.sort, 'date');
   assert.deepEqual(names(t.model, 'src'), ['x', 'y'], '没取完之前旧顺序不动');
   for (const request of requests) t.reply(request, entries(request.path === '' ? ['a.txt', 'src/'] : ['y', 'x']));
   await flush();
@@ -35,15 +35,14 @@ test('请求带当前排序，默认名称升序；setSort 换排序后重取根
   assert.deepEqual(names(t.model), ['a.txt', 'src']);
 });
 
-test('setSort：同一排序不重取；形状不对的忽略', async () => {
+test('setSort：同一排序不重取；不是四种键之一的（含带方向的旧形状）忽略', async () => {
   const t = manual();
   await ready(t);
   const start = t.sent.length;
-  await t.model.setSort({ key: 'name', desc: false });
-  await t.model.setSort({ key: 'size' });
-  await t.model.setSort('date');
+  await t.model.setSort('name');
+  for (const sort of [{ key: 'size' }, { key: 'date', desc: true }, 'Date', 'color', null, 3]) await t.model.setSort(sort);
   assert.equal((await t.lists()).length, start);
-  assert.deepEqual(t.model.sort, { key: 'name', desc: false });
+  assert.equal(t.model.sort, 'name');
 });
 
 test('setSort：这次取的条数不超过 RESTORE_LIMIT，普通刷新取够用户翻出来的条数', async () => {
@@ -64,7 +63,7 @@ test('setSort：这次取的条数不超过 RESTORE_LIMIT，普通刷新取够�
       for (const request of open) { request.done = true; answered++; t.reply(request, { entries: many(12_000), nextCursor: `c${answered}` }); }
     }
   };
-  assert.equal(await run(() => t.model.setSort({ key: 'size', desc: false })), 2, '24,000 条已经超过 20,000，不再取');
+  assert.equal(await run(() => t.model.setSort('size')), 2, '24,000 条已经超过 20,000，不再取');
   assert.equal(t.model.dirs.get('src').entries.length, 24_000);
   assert.ok(t.model.dirs.get('src').next);
   t.model.dirs.get('src').entries = many(30_000);
@@ -130,7 +129,7 @@ test('旧的 loadMore 不追加：换排序后迟到的下一页被丢弃', asyn
   await flush();
   t.model.loadMore('src');
   const [, more] = await t.lists('src');
-  t.model.setSort({ key: 'size', desc: true });
+  t.model.setSort('size');
   t.reply(more, entries(['late']));
   await flush();
   assert.deepEqual(names(t.model, 'src'), ['a', 'b']);
@@ -201,7 +200,7 @@ test('cursor_expired：刷新取到一半游标过期，丢掉已取的从第一
 
 test('sortFallback：来自第一页，提示行不可点、不算内容；下一次第一页不带就清除', async () => {
   const t = manual();
-  t.model.sort = { key: 'size', desc: true }; // 选了大小排序，目录太大退回了名称
+  t.model.sort = 'size'; // 选了大小排序，目录太大退回了名称
   await ready(t, ['src/']);
   t.model.toggle('src');
   t.reply((await t.lists('src'))[0], { ...entries([]), sortFallback: true });
@@ -210,7 +209,7 @@ test('sortFallback：来自第一页，提示行不可点、不算内容；下�
   let rows = visibleRows(t.model);
   const at = rows.findIndex(row => row.path === 'src' && row.type === 'status');
   assert.deepEqual([rows[at].text, rows[at].retry, rows[at + 1].text], ['条目太多，只能按名称排列', undefined, '空目录'], '提示行之后仍然判断空目录');
-  t.model.setSort({ key: 'name', desc: false });
+  t.model.setSort('name');
   for (const request of (await t.lists()).slice(-2)) t.reply(request, request.path === '' ? entries(['src/']) : entries(['a']));
   await flush();
   assert.equal(t.model.dirs.get('src').sortFallback, false);
@@ -220,24 +219,24 @@ test('sortFallback：来自第一页，提示行不可点、不算内容；下�
 
 test('parseState：校验顶层 sort，形状不对回默认值；保存和裁剪不丢它', () => {
   const base = { v: 1, seq: 0, hidden: false, sessions: {} };
-  assert.deepEqual(parseState(undefined).sort, { key: 'name', desc: false });
-  assert.deepEqual(parseState({ ...base, sort: { key: 'size', desc: true } }).sort, { key: 'size', desc: true });
-  for (const sort of [{ key: 'size' }, { key: 'x', desc: true }, 'size', null, 5, { key: 'size', desc: 1 }]) {
-    assert.deepEqual(parseState({ ...base, sort }).sort, { key: 'name', desc: false }, JSON.stringify(sort));
+  assert.equal(parseState(undefined).sort, 'name');
+  for (const sort of ['name', 'kind', 'date', 'size']) assert.equal(parseState({ ...base, sort }).sort, sort);
+  // 其余的回默认值，包括 0.4.0 测试版存过的 { key, desc } 对象：不崩，落回名称。
+  for (const sort of [{ key: 'size', desc: true }, { key: 'date', desc: false }, { key: 'size' }, { key: 'x', desc: true }, 'Size', '', null, 5]) {
+    assert.equal(parseState({ ...base, sort }).sort, 'name', JSON.stringify(sort));
   }
-  assert.deepEqual(parseState({ ...base, sort: { key: 'date', desc: false, extra: 1 } }).sort, { key: 'date', desc: false });
-  const state = parseState({ ...base, sort: { key: 'date', desc: true } });
+  const state = parseState({ ...base, sort: 'date' });
   putSession(state, 'A', { expanded: [], selected: null, scroll: { tree: 0, top: 0, left: 0 } });
-  assert.deepEqual(trimState(state, 'A', 10).sort ?? { key: 'date', desc: true }, { key: 'date', desc: true });
-  assert.deepEqual(trimState(state, 'A').sort, { key: 'date', desc: true });
+  assert.equal(trimState(state, 'A', 10).sort ?? 'date', 'date');
+  assert.equal(trimState(state, 'A').sort, 'date');
 });
 
 test('parseState：每个会话的滚动位置带当时的排序，形状不对或缺失（旧版本）是默认排序', () => {
   const scroll = sort => ({ tree: 5, top: 0, left: 0, ...(sort === undefined ? {} : { sort }) });
   const { sessions } = parseState({ v: 1, sessions: {
-    A: { expanded: [], scroll: scroll({ key: 'date', desc: true }) }, B: { expanded: [], scroll: scroll() },
-    C: { expanded: [], scroll: scroll({ key: 'color', desc: true }) }, D: { expanded: [], scroll: scroll('size') },
+    A: { expanded: [], scroll: scroll('date') }, B: { expanded: [], scroll: scroll() },
+    C: { expanded: [], scroll: scroll('color') }, D: { expanded: [], scroll: scroll({ key: 'size', desc: true }) },
   } });
-  assert.deepEqual(sessions.A.scroll.sort, { key: 'date', desc: true });
-  for (const id of ['B', 'C', 'D']) assert.deepEqual(sessions[id].scroll.sort, { key: 'name', desc: false }, id);
+  assert.equal(sessions.A.scroll.sort, 'date');
+  for (const id of ['B', 'C', 'D']) assert.equal(sessions[id].scroll.sort, 'name', id);
 });

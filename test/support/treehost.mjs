@@ -33,4 +33,3 @@ export async function openTree(t, { platform = 'ios', listing = { '': ['a.txt', 
 export const rowsOf = page => page.tree.find(node => node.classList.contains('row'));
 export const rowNamed = (page, text) => rowsOf(page).find(node => node.textContent.includes(text));
 export const sectionOf = page => page.tree.find(node => node.classList.contains('section'))[0];
-export const sectionNameOf = page => sectionOf(page).find(node => node.classList.contains('section-name'))[0];

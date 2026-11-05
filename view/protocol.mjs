@@ -25,15 +25,11 @@ export const ErrorCode = Object.freeze({
   INVALID_OFFSET: 'invalid_offset', INVALID_SORT: 'invalid_sort', TOO_LARGE: 'too_large', IO: 'io_error',
 });
 
-// 目录排序：key 是下面四种之一，desc 为 true 是降序。缺省（请求不带 sort）是名称升序。
+// 目录排序：值是下面四种之一，缺省（请求不带 sort）是名称。方向由排序键决定，只在 lib/tree.mjs 里定义一处。
 export const SortKey = Object.freeze({ NAME: 'name', KIND: 'kind', DATE: 'date', SIZE: 'size' });
-export const DEFAULT_SORT = Object.freeze({ key: SortKey.NAME, desc: false });
-export const sameSort = (a, b) => a.key === b.key && a.desc === b.desc;
-// 形状对的返回规范化的 { key, desc }，否则 null。
-export function parseSort(raw) {
-  if (!raw || typeof raw !== 'object' || !Object.values(SortKey).includes(raw.key) || typeof raw.desc !== 'boolean') return null;
-  return { key: raw.key, desc: raw.desc };
-}
+export const DEFAULT_SORT = SortKey.NAME;
+// 是四种之一的返回它，否则 null（含旧版本保存过的 { key, desc } 对象）。
+export const parseSort = raw => (Object.values(SortKey).includes(raw) ? raw : null);
 
 // 目录条目的 kind：dir、file；link 是指向工作目录外或已失效的链接；other 是不能打开的（套接字、名字含控制字符等）。
 // 指向工作目录内的链接按目标显示成 dir 或 file，并带 link: true。

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
 import { flush } from './support/fake.mjs';
-import { openTree, rowNamed, sectionNameOf, sectionOf } from './support/treehost.mjs';
+import { openTree, rowNamed, sectionOf } from './support/treehost.mjs';
 import { iconFor, icon } from '../view/icons.mjs';
 
 const svgOf = node => node.find(child => child.tagName === 'SVG')[0];
@@ -116,15 +116,15 @@ test('分区标题：根目录的最后一段，随会话变；根目录不是 r
   assert.equal(visible(sectionOf(page)), false, '还没有根目录');
   host.session('s1', '/Users/x/code/alpha');
   await flush();
-  assert.equal(sectionNameOf(page).textContent, 'alpha');
+  assert.equal(sectionOf(page).textContent, 'alpha');
   assert.ok(visible(sectionOf(page)));
   assert.equal(page.tree.children[0], sectionOf(page), '标题在滚动容器里、卡片和列表之前');
   host.session('s2', '/tmp/beta/');
   await flush();
-  assert.equal(sectionNameOf(page).textContent, 'beta');
+  assert.equal(sectionOf(page).textContent, 'beta');
   host.session('s3', '/');
   await flush();
-  assert.equal(sectionNameOf(page).textContent, '/', '根就是 /');
+  assert.equal(sectionOf(page).textContent, '/', '根就是 /');
 });
 
 test('标题高度不影响可见行：spacer 前面的偏移从滚动值里扣掉', async t => {

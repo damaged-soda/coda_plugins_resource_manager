@@ -1,6 +1,6 @@
 // 目录树：visibleRows 把模型压成扁平行（纯逻辑）；mountTree 只画可见的那一段，上万条也不卡。
 import { EntryKind, SortKey } from './protocol.mjs';
-import { dateText, infoText, sizeText, sortAria, sortName } from './format.mjs';
+import { dateText, infoText, sizeText } from './format.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
@@ -42,23 +42,14 @@ export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
 
 const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
-// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row), sort(button) }
-// menu 收到整行（路径、种类、大小、修改时间）；sort 收到 Mac 标题行上的排序按钮，菜单贴着它。
+// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row) }
+// menu 收到整行（路径、种类、大小、修改时间）。
 // draggable：触屏上拖行没有用处，还会抢滚动，关掉。now：当前时间，日期的相对格式用，测试可注入。
 // longPress：触屏上按住一行打开 handlers.menu（Mac 用右键）。不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
 export function mountTree(el, model, handlers, { draggable = true, longPress = false, now = Date.now } = {}) {
   const title = document.createElement('div'), spacer = document.createElement('div'), win = document.createElement('div');
-  title.className = 'section'; spacer.className = 'spacer'; win.className = 'win';
+  title.className = 'section truncate'; spacer.className = 'spacer'; win.className = 'win';
   title.hidden = true;
-  // 标题行：根目录名、排序按钮（Mac）。按钮是同一个节点，只换文字和可访问名称：菜单记着是谁打开的，重建会让它认不出。
-  const titleName = document.createElement('span'), sortButton = document.createElement('button'), sortText = document.createElement('span');
-  titleName.className = 'section-name grow truncate';
-  sortButton.className = 'sort';
-  sortButton.setAttribute('aria-haspopup', 'menu');
-  sortButton.setAttribute('aria-expanded', 'false');
-  sortButton.append(icon('sort', 14), sortText);
-  sortButton.addEventListener('click', () => handlers.sort(sortButton));
-  title.append(titleName, sortButton);
   spacer.append(win);
   el.replaceChildren(title, spacer);
   let rows = [], rowH = 24;
@@ -76,14 +67,8 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
   // 分区标题：根目录的名字（root.path 的最后一段），不是 ready 时不显示。iPhone 上由 CSS 隐藏。
   const paintTitle = () => {
     const text = model.ready ? rootName(model.root.path) : '';
-    if (titleName.textContent !== text) titleName.textContent = text;
+    if (title.textContent !== text) title.textContent = text;
     title.hidden = text === '';
-    const aria = sortAria(model.sort);
-    if (sortButton.getAttribute('aria-label') !== aria) {
-      sortButton.setAttribute('aria-label', aria);
-      sortButton.title = aria;
-      sortText.textContent = sortName(model.sort.key);
-    }
   };
 
   // 标题在滚动容器里，把 spacer 推下去 offsetTop：行的位置按 spacer 内部算，滚动值（保存和恢复的）仍是容器的。
@@ -131,7 +116,7 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
       sub.className = 'sub caption secondary truncate';
       sub.textContent = `${dateText(row, time)} · ${sizeText(row)}`;
       meta.className = 'meta caption secondary';
-      meta.textContent = model.sort.key === SortKey.DATE ? dateText(row, time) : sizeText(row);
+      meta.textContent = model.sort === SortKey.DATE ? dateText(row, time) : sizeText(row);
       main.append(sub);
       parts.push(meta);
     }

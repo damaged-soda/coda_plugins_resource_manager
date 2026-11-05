@@ -1,5 +1,5 @@
 // 页面的纯状态：目录树、状态保留。不碰 DOM，请求与代次在 connection.mjs，设计见 docs/design/phase-1.md 第 6、7 节。
-import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort, sameSort } from './protocol.mjs';
+import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
@@ -39,7 +39,7 @@ export class Model {
   wanted = new Map(); // 恢复状态时各目录要取够的条数，第一次取用后删掉
   selected = null;
   showHidden = false;
-  sort = { ...DEFAULT_SORT }; // 全局一份，由页面存进 persisted
+  sort = DEFAULT_SORT; // 全局一份，由页面存进 persisted
   #round = 0; // refresh 的轮次：新一轮开始后，旧一轮不再派发排队的目录
 
   constructor({ link, onChange = () => {} }) { Object.assign(this, { link, onChange }); }
@@ -93,7 +93,7 @@ export class Model {
   // 换排序：已加载的目录按新顺序重新取，取够现在的条数，这次最多 RESTORE_LIMIT 条；每个目录一次替换。
   setSort(sort) {
     const next = parseSort(sort);
-    if (!next || sameSort(next, this.sort)) return Promise.resolve();
+    if (!next || next === this.sort) return Promise.resolve();
     this.sort = next;
     this.onChange();
     return this.refresh({ cap: RESTORE_LIMIT });
@@ -205,10 +205,10 @@ const parseLoaded = raw => Object.fromEntries(Object.entries(raw && typeof raw =
 
 // 读回来的值可能是别的版本或坏的，只认自己的形状。
 export function parseState(raw) {
-  const state = { v: 1, seq: 0, hidden: false, sort: { ...DEFAULT_SORT }, sessions: {} };
+  const state = { v: 1, seq: 0, hidden: false, sort: DEFAULT_SORT, sessions: {} };
   if (!raw || typeof raw !== 'object' || raw.v !== 1) return state;
   state.hidden = raw.hidden === true;
-  state.sort = parseSort(raw.sort) ?? { ...DEFAULT_SORT };
+  state.sort = parseSort(raw.sort) ?? DEFAULT_SORT;
   state.seq = Number.isSafeInteger(raw.seq) ? raw.seq : 0;
   for (const [id, item] of Object.entries(raw.sessions ?? {})) {
     if (!item || typeof item !== 'object') continue;
@@ -217,7 +217,7 @@ export function parseState(raw) {
       at: Number.isSafeInteger(item.at) ? item.at : 0, expanded: strings(item.expanded, 5000),
       selected: typeof item.selected === 'string' && item.selected.length <= 1024 ? item.selected : null,
       // 滚动位置是按当时的排序存的；旧版本没有这个字段，那时一定是默认排序。
-      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? { ...DEFAULT_SORT } },
+      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? DEFAULT_SORT },
     };
     const loaded = parseLoaded(item.loaded);
     if (Object.keys(loaded).length > 0) state.sessions[id].loaded = loaded;
