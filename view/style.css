@@ -182,5 +182,5 @@ button.icon svg { display: block; }
 .coda-ios .menu-head { padding: 6px 12px 2px; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
-.bar .exit { display: none; }
-@media (orientation: landscape) and (max-height: 500px) { .coda-ios .bar .exit { display: inline-flex; } }
+.bar .exit, .bar.exit-only { display: none; } /* 只有返回的工具条（属性页）：返回不显示，整条也不占高度 */
+@media (orientation: landscape) and (max-height: 500px) { .coda-ios .bar .exit { display: inline-flex; } .coda-ios .bar.exit-only { display: flex; } }

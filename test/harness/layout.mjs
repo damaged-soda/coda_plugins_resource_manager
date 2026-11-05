@@ -599,15 +599,48 @@ try {
   await until(`JSON.stringify(window.__rpc.toolbars.at(-1)?.map(x => x.id)) === '["more"]'`, '退出属性页后恢复「更多」');
   check('Mac：退出属性页后「更多」恢复', true);
   const phoneBar = `[...document.querySelectorAll('#bar > *')].map(x => x.classList.contains('exit') ? 'exit' : x.classList.contains('bar-title') ? 'title' : x.getAttribute('aria-label'))`;
+  // 工具条的实际占位：整条是否显示、高度，以及可见的按钮。
+  const barBox = `(() => { const b = document.getElementById('bar'), r = b.getBoundingClientRect(), shown = [...b.querySelectorAll('button')].filter(x => x.getClientRects().length > 0);
+    return { display: getComputedStyle(b).display, height: r.height, top: r.top, shown: shown.map(x => x.textContent), clickable: shown.map(x => { const q = x.getBoundingClientRect(); return document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('button') === x; }),
+      title: b.querySelector('.bar-title')?.textContent ?? null, more: b.querySelector('[aria-label="更多"]') !== null, headTop: document.querySelector('#info .phead')?.getBoundingClientRect().top }; })()`;
+  // 只改视口，不重载页面：旋转屏幕。
+  const rotate = size => send('Emulation.setDeviceMetricsOverride', { width: SIZES[size][0], height: SIZES[size][1], deviceScaleFactor: 2, mobile: true });
+  const readTree = async size => {
+    const names = await evaluate(phoneBar), box = await evaluate(barBox);
+    check(`iPhone ${size}：目录树上工具条是 返回、根目录名、更多`, JSON.stringify(names) === '["exit","title","更多"]' && box.title === 'demo-project' && box.more && box.height >= 44, JSON.stringify({ names, box }));
+  };
+  const readInfo = async size => {
+    const names = await evaluate(phoneBar), box = await evaluate(barBox), land = size === 'landscape';
+    check(`iPhone ${size}：属性页上工具条只有返回，没有根目录名和 ⋯`, JSON.stringify(names) === '["exit"]' && box.title === null && !box.more, JSON.stringify({ names, box }));
+    if (land) check('iPhone landscape：属性页上只有「返回」，可见、至少 44 点、点得到', box.display !== 'none' && JSON.stringify(box.shown) === '["返回"]' && box.clickable.every(Boolean) && box.height >= 44, JSON.stringify(box));
+    else check('iPhone portrait：属性页上整条工具条不占高度，头部贴着顶', box.display === 'none' && box.height === 0 && box.headTop === 0, JSON.stringify(box));
+  };
   for (const size of ['portrait', 'landscape']) {
     await open(size, 'ios', 'light');
-    check(`iPhone ${size}：目录树上工具条是 返回、根目录名、更多`, JSON.stringify(await evaluate(phoneBar)) === '["exit","title","更多"]', JSON.stringify(await evaluate(phoneBar)));
+    await readTree(size);
     await openInfo('ios', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
-    await until(`JSON.stringify(${phoneBar}) === '["exit","title"]'`, '属性页上工具条没有 ⋯');
-    check(`iPhone ${size}：属性页上页内工具条只剩返回和标题（返回${size === 'landscape' ? '显示' : '隐藏'}）`, await evaluate(`getComputedStyle(document.querySelector('#bar .exit')).display !== 'none'`) === (size === 'landscape'));
+    await until(`JSON.stringify(${phoneBar}) === '["exit"]'`, '属性页上工具条只剩返回');
+    await readInfo(size);
+    if (size === 'landscape') {
+      await evaluate(`document.querySelector('#bar .exit').click()`);
+      await until(`getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '横屏返回关属性页');
+      check('iPhone landscape：点「返回」回到目录树，没有离开视图', await evaluate(`location.pathname === '/view/index.html'`));
+    } else await leaveInfo('ios');
+    await until(`JSON.stringify(${phoneBar}) === '["exit","title","更多"]'`, '退出属性页后根目录名和 ⋯ 恢复');
+    await readTree(size);
+  }
+  // 旋转：属性页开着时竖到横、横到竖，工具条跟着变；退出后根目录名和 ⋯ 都在。
+  for (const [from, to] of [['portrait', 'landscape'], ['landscape', 'portrait']]) {
+    await open(from, 'ios', 'light');
+    await openInfo('ios', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
+    await readInfo(from);
+    await rotate(to);
+    await until(`matchMedia('(orientation: ${to})').matches`, '旋转完成');
+    await frames();
+    await readInfo(to);
     await leaveInfo('ios');
-    await until(`JSON.stringify(${phoneBar}) === '["exit","title","更多"]'`, '退出属性页后 ⋯ 恢复');
-    check(`iPhone ${size}：退出属性页后 ⋯ 恢复`, true);
+    await until(`JSON.stringify(${phoneBar}) === '["exit","title","更多"]'`, '旋转后退出属性页');
+    await readTree(to);
   }
 
   // 颜色：每个 --tone-* 在 --coda-background 和 --coda-card 上的对比度不低于 3:1（读真实计算值）；.tone-* 类真的把这个颜色给到图标上；不能打开的条目仍是三级文字色。

@@ -137,9 +137,10 @@ const toolbarItems = () => infoOpen ? [] : hasToolbar
     { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
     { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
   ];
-// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里；属性页上没有 ⋯。
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
+// 属性页上只留返回：竖屏有原生导航栏，整条工具条不显示；横屏导航栏隐藏，页面自己给返回（显示与否都由 style.css 的横屏媒体查询决定）。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
-const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, ...(infoOpen ? [] : [MORE])];
+const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar() {
@@ -149,7 +150,8 @@ function syncToolbar() {
   if (hasToolbar) return quiet(() => coda.toolbar(items));
   menu.hide(); // 重画会换掉 ⋯ 按钮，开着的菜单认不得新按钮
   paintBar($('bar'), items, act);
-  $('bar').hidden = items.length === 0; // 没有项（属性页上的页内工具条）就整条不显示
+  $('bar').hidden = items.length === 0; // 没有项（Mac 属性页上的页内工具条）就整条不显示
+  $('bar').classList.toggle('exit-only', items.length === 1 && items[0].id === EXIT.id); // 只有返回的工具条跟着返回走：竖屏整条不显示
 }
 
 // 原生按钮没有 DOM 元素可以当锚点：用一个固定在页面右上角的假锚点，同时也是「谁打开的菜单」的标记。
