@@ -11,6 +11,8 @@ const FULL = '2020-03-04 10:00:00';
 const listing = {
   '': [
     { name: 'src', kind: 'dir', mtimeMs: OLD },
+    { name: 'nodate', kind: 'dir' },
+    { name: 'sized', kind: 'dir', size: 4096, mtimeMs: OLD },
     { name: 'a.txt', kind: 'file', size: 1536, mtimeMs: OLD },
     { name: 'new.txt', kind: 'file', size: 12, mtimeMs: noon },
     { name: 'bare.txt', kind: 'file' },
@@ -131,24 +133,40 @@ for (const platform of ['mac', 'ios']) {
   });
 }
 
-test('Mac 行：meta 按日期排序显示日期，否则显示大小；文件夹的大小是 —；读不到是 —；不能打开的没有 meta', async t => {
+const DIRS = ['src', 'nodate', 'sized'];
+test('Mac 行：文件夹右侧只有按日期排序时的日期，没有大小也没有 —；读不到修改时间的文件夹什么都没有；文件不变', async t => {
   const ctx = await start(t);
   const { page } = ctx;
   const meta = name => part(rowNamed(page, name), 'meta')?.textContent;
-  assert.deepEqual(['src', 'a.txt', 'new.txt', 'bare.txt'].map(meta), ['—', '1.5 KiB', '12 B', '—']);
+  const noMeta = name => assert.equal(part(rowNamed(page, name), 'meta'), undefined, `${name} 没有 meta 元素，不留间距`);
+  const checkDirsEmpty = () => {
+    for (const name of DIRS) {
+      noMeta(name);
+      assert.deepEqual(part(rowNamed(page, name), 'main').children.map(n => n.className.split(' ')[0]), ['name', 'sub'].slice(0, name === 'nodate' ? 1 : 2));
+    }
+  };
+  for (const key of ['名称', '种类', '大小']) {
+    if (key !== '名称') await choose(ctx, key);
+    checkDirsEmpty();
+    assert.deepEqual(['a.txt', 'new.txt', 'bare.txt'].map(meta), ['1.5 KiB', '12 B', '—'], `${key}排序：文件显示大小`);
+  }
   assert.equal(part(rowNamed(page, 'gone'), 'meta'), undefined);
   assert.equal(part(rowNamed(page, 'gone'), 'sub'), undefined);
   await choose(ctx, '日期');
-  assert.deepEqual(['src', 'a.txt', 'bare.txt'].map(meta), ['2020年3月', '2020年3月', '—']);
+  assert.deepEqual(['src', 'sized', 'a.txt', 'bare.txt'].map(meta), ['2020年3月', '2020年3月', '2020年3月', '—']);
+  noMeta('nodate');
   assert.match(meta('new.txt'), /^\d\d:\d\d$/, '今天是时分');
-  await choose(ctx, '种类');
-  assert.equal(meta('a.txt'), '1.5 KiB', '种类也显示大小');
+  for (const name of DIRS) assert.doesNotMatch(rowNamed(page, name).textContent, /[—·]/, name);
 });
 
-test('iPhone 行：名字下面一行 日期 · 大小，文件夹是 日期 · —；不能打开的只有名字', async t => {
+test('iPhone 行：文件 日期 · 大小；文件夹只有日期，读不到修改时间的文件夹没有第二行；不能打开的只有名字', async t => {
   const { page } = await start(t, { platform: 'ios' });
   const sub = name => part(rowNamed(page, name), 'sub')?.textContent;
-  assert.equal(sub('src'), '2020年3月 · —');
+  assert.equal(sub('src'), '2020年3月');
+  assert.equal(sub('sized'), '2020年3月', '就算数据里有大小也不显示');
+  assert.equal(sub('nodate'), undefined);
+  assert.deepEqual(part(rowNamed(page, 'nodate'), 'main').children.map(node => node.className), ['name truncate'], '和不能打开的条目一样，只有名字');
+  for (const name of DIRS) assert.doesNotMatch(rowNamed(page, name).textContent, /[—·]/, name);
   assert.equal(sub('a.txt'), '2020年3月 · 1.5 KiB');
   assert.match(sub('new.txt'), /^\d\d:\d\d · 12 B$/);
   assert.equal(sub('bare.txt'), '— · —');
@@ -157,10 +175,12 @@ test('iPhone 行：名字下面一行 日期 · 大小，文件夹是 日期 · 
   assert.deepEqual(part(gone, 'main').children.map(node => node.className), ['name truncate'], '只有名字');
 });
 
-test('Mac 的 title：路径、大小、完整修改时间', async t => {
+test('Mac 的 title：文件是路径、大小、完整修改时间；文件夹只有完整修改时间，读不到就只有路径', async t => {
   const { page } = await start(t);
   assert.equal(rowNamed(page, 'a.txt').title, `a.txt\n1.5 KiB · ${FULL}`);
-  assert.equal(rowNamed(page, 'src').title, `src\n— · ${FULL}`);
+  assert.equal(rowNamed(page, 'src').title, `src\n${FULL}`);
+  assert.equal(rowNamed(page, 'sized').title, `sized\n${FULL}`);
+  assert.equal(rowNamed(page, 'nodate').title, 'nodate');
   assert.equal(rowNamed(page, 'bare.txt').title, 'bare.txt\n— · —');
   assert.equal(rowNamed(page, 'gone').title, 'gone\n指向工作目录外的链接，不能打开');
 });
@@ -168,13 +188,16 @@ test('Mac 的 title：路径、大小、完整修改时间', async t => {
 const detail = page => part(page.menu, 'menu-info')?.textContent;
 const touch = (extra = {}) => ({ pointerId: 1, isPrimary: true, clientX: 50, clientY: 60, ...extra });
 
-test('右键菜单（Mac）：路径下面一行 大小 · 完整修改时间；读不到的是 —；不能打开的没有这一行', async t => {
+test('右键菜单（Mac）：路径下面一行 大小 · 完整修改时间；文件夹只有修改时间；文件读不到的是 —；不能打开的没有这一行', async t => {
   const { page } = await start(t);
   rowNamed(page, 'a.txt').dispatch('contextmenu', { clientX: 5, clientY: 6 });
   assert.equal(part(page.menu, 'menu-path').textContent, 'a.txt');
   assert.equal(detail(page), `1.5 KiB · ${FULL}`);
   rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
-  assert.equal(detail(page), `— · ${FULL}`);
+  assert.equal(detail(page), FULL, '文件夹只有完整修改时间');
+  rowNamed(page, 'nodate').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  assert.equal(part(page.menu, 'menu-path').textContent, 'nodate');
+  assert.equal(detail(page), undefined, '文件夹读不到修改时间：没有信息行');
   rowNamed(page, 'bare.txt').dispatch('contextmenu', { clientX: 5, clientY: 6 });
   assert.equal(detail(page), '— · —');
   rowNamed(page, 'gone').dispatch('contextmenu', { clientX: 5, clientY: 6 });

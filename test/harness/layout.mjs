@@ -206,7 +206,7 @@ try {
       metaHidden: getComputedStyle(q(normal, '.meta')).display === 'none', deadSub: q(dead, '.sub') === null, deadH: db.height, deadCentered: Math.abs((d.top + d.bottom) / 2 - (db.top + db.bottom) / 2) < 0.6,
       dirSub: q(dir, '.sub').textContent, sepLeft: before.left, sepHeight: before.height, sepTop: before.top, firstSep: first.content, thirdSep: getComputedStyle(third, '::before').left,
       stepOk: Math.abs(box(third).top - box(second).top - 58) < 0.01 }; })()`);
-  check('iPhone：两行列表，名字下面是 日期 · 大小（往年/今年/今天的格式），文件夹大小是 —，Mac 的 meta 隐藏', two.normalH === 58 && /^2025年3月 · \d+ B$/.test(two.sub) && two.subShown && two.subInside && two.metaHidden && /^\d\d:\d\d · —$/.test(two.dirSub), JSON.stringify(two));
+  check('iPhone：两行列表，名字下面是 日期 · 大小（往年/今年/今天的格式），文件夹只有日期，Mac 的 meta 隐藏', two.normalH === 58 && /^2025年3月 · \d+ B$/.test(two.sub) && two.subShown && two.subInside && two.metaHidden && /^\d\d:\d\d$/.test(two.dirSub), JSON.stringify(two));
   check('iPhone：不能打开的条目只有名字，行高 58，名字垂直居中', two.deadSub && two.deadH === 58 && two.deadCentered, JSON.stringify(two));
   check('iPhone：分隔线 1 点，从图标之后开始（首行没有），行距 58', two.sepHeight === '1px' && two.sepLeft === '46px' && two.sepTop === '0px' && two.firstSep === 'none' && two.thirdSep === '46px' && two.stepOk, JSON.stringify(two));
 
@@ -331,6 +331,10 @@ try {
       inRow: box(meta).right <= box(long).right + 0.01, text: plain.querySelector('.meta').textContent, tree: document.getElementById('tree').clientWidth,
       container: getComputedStyle(document.getElementById('tree')).containerType, subHidden: getComputedStyle(long.querySelector('.sub')).display === 'none' }; })()`);
   check('Mac 宽度够：meta 显示（大小），长名字被截断而 meta 不缩，meta 在行内；iPhone 的第二行隐藏', wide.shown && wide.truncated && wide.metaW > 0 && wide.metaW === wide.plainW && wide.inRow && wide.text === '2 B' && wide.container === 'inline-size' && wide.subHidden, JSON.stringify(wide));
+  // 文件夹行：名字排序时右侧没有 meta 元素，名字可以占满；文字里没有 — 和 ·。
+  const dirRow = await evaluate(`(() => { const row = document.querySelector('.row.dir'), name = row.querySelector('.name'), r = row.getBoundingClientRect(), n = name.getBoundingClientRect(), tail = row.querySelector('.tail');
+    return { meta: row.querySelector('.meta'), sub: row.querySelector('.sub') !== null, text: row.textContent, gap: r.right - n.right, tailShown: getComputedStyle(tail).display !== 'none' }; })()`);
+  check('Mac 文件夹行：右侧没有 meta，文字里没有 — 和 ·，名字右边只剩行内边距', dirRow.meta === null && !/[—·]/.test(dirRow.text) && dirRow.gap <= 12 && !dirRow.tailShown, JSON.stringify(dirRow));
   await open('narrow', 'mac', 'light');
   const narrow = await evaluate(`(() => ({ tree: document.getElementById('tree').clientWidth, shown: [...document.querySelectorAll('.meta')].filter(m => m.getClientRects().length > 0).length, total: document.querySelectorAll('.meta').length }))()`);
   check('Mac 窄于 220 点：meta 全部隐藏', narrow.tree < 220 && narrow.total > 0 && narrow.shown === 0, JSON.stringify(narrow));

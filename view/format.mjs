@@ -26,11 +26,15 @@ export function formatFullDate(ms) {
 }
 
 const MISSING = '—';
-// 条目的大小和日期，读不到的部分是 —；文件夹没有大小。
-export const sizeText = entry => (entry.kind !== EntryKind.DIR && Number.isInteger(entry.size) ? formatSize(entry.size) : MISSING);
-export const dateText = (entry, now) => (Number.isInteger(entry.mtimeMs) ? formatDate(entry.mtimeMs, now) : MISSING);
-// 菜单信息行和 Mac 的 title：大小 · 完整修改时间。
-export const infoText = entry => `${sizeText(entry)} · ${Number.isInteger(entry.mtimeMs) ? formatFullDate(entry.mtimeMs) : MISSING}`;
+const isDir = entry => entry.kind === EntryKind.DIR;
+// 条目的大小和日期：文件读不到的部分是 —；文件夹不显示大小，读不到修改时间也不显示 —，返回空串。
+export const sizeText = entry => (isDir(entry) ? '' : Number.isInteger(entry.size) ? formatSize(entry.size) : MISSING);
+export const dateText = (entry, now) => (Number.isInteger(entry.mtimeMs) ? formatDate(entry.mtimeMs, now) : isDir(entry) ? '' : MISSING);
+const joined = parts => parts.filter(Boolean).join(' · ');
+// iPhone 第二行：日期 · 大小；文件夹只有日期。
+export const subText = (entry, now) => joined([dateText(entry, now), sizeText(entry)]);
+// 菜单信息行和 Mac 的 title：大小 · 完整修改时间；文件夹只有完整修改时间。没有内容时是空串。
+export const infoText = entry => joined([sizeText(entry), Number.isInteger(entry.mtimeMs) ? formatFullDate(entry.mtimeMs) : isDir(entry) ? '' : MISSING]);
 
 const NAMES = { [SortKey.NAME]: '名称', [SortKey.KIND]: '种类', [SortKey.DATE]: '日期', [SortKey.SIZE]: '大小' };
 export const sortName = key => NAMES[key];

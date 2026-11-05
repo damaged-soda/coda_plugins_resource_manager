@@ -235,8 +235,8 @@ function openMenu(anchor, { title, detail, items }) {
   menu.style.top = `max(var(--safe-top), min(${y}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
   if (box) { opener = anchor; opener.setAttribute?.('aria-expanded', 'true'); }
 }
-// 行菜单：路径下面一行 大小 · 完整修改时间；指向外面的链接和不能打开的条目没有元数据，不显示这一行。
-const pathMenu = (event, row) => openMenu(event, { title: row.path, detail: row.kind === EntryKind.LINK || row.kind === EntryKind.OTHER ? undefined : infoText(row), items: [
+// 行菜单：路径下面一行 大小 · 完整修改时间（文件夹只有修改时间，读不到就没有这一行）；指向外面的链接和不能打开的条目没有元数据，不显示这一行。
+const pathMenu = (event, row) => openMenu(event, { title: row.path, detail: row.kind === EntryKind.LINK || row.kind === EntryKind.OTHER ? undefined : infoText(row) || undefined, items: [
   { label: '复制相对路径', run: () => coda.copy(row.path) },
   { label: '复制绝对路径', run: () => coda.copy(`${model.root.path}/${row.path}`) },
 ] });

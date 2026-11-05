@@ -1,6 +1,6 @@
 // 目录树：visibleRows 把模型压成扁平行（纯逻辑）；mountTree 只画可见的那一段，上万条也不卡。
 import { EntryKind, SortKey } from './protocol.mjs';
-import { dateText, infoText, sizeText } from './format.mjs';
+import { dateText, infoText, sizeText, subText } from './format.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
@@ -111,19 +111,26 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     main.append(label);
     const parts = [chevron, glyph, main];
     if (!dead) {
-      // 能打开的条目带信息；link、other 没有，iPhone 上名字垂直居中。
-      const sub = document.createElement('span'), meta = document.createElement('span');
-      sub.className = 'sub caption secondary truncate';
-      sub.textContent = `${dateText(row, time)} · ${sizeText(row)}`;
-      meta.className = 'meta caption secondary';
-      meta.textContent = model.sort === SortKey.DATE ? dateText(row, time) : sizeText(row);
-      main.append(sub);
-      parts.push(meta);
+      // 能打开的条目带信息；link、other 没有。文件夹没有的部分整个不画：iPhone 名字垂直居中，Mac 右侧不留空位。
+      const subContent = subText(row, time), metaContent = model.sort === SortKey.DATE ? dateText(row, time) : sizeText(row);
+      if (subContent) {
+        const sub = document.createElement('span');
+        sub.className = 'sub caption secondary truncate';
+        sub.textContent = subContent;
+        main.append(sub);
+      }
+      if (metaContent) {
+        const meta = document.createElement('span');
+        meta.className = 'meta caption secondary';
+        meta.textContent = metaContent;
+        parts.push(meta);
+      }
     }
     tail.className = row.failed ? 'tail warn' : 'tail';
     if (row.failed) tail.append(icon('warning', 14));
     else if (row.link) tail.append(icon('turn', 14));
-    node.title = row.failed ? `${row.path}\n读取失败：${row.failed}` : TITLES[row.kind] ? `${row.path}\n${TITLES[row.kind]}` : `${row.path}\n${infoText(row)}`;
+    const info = row.failed || TITLES[row.kind] ? '' : infoText(row);
+    node.title = row.failed ? `${row.path}\n读取失败：${row.failed}` : TITLES[row.kind] ? `${row.path}\n${TITLES[row.kind]}` : info ? `${row.path}\n${info}` : row.path;
     node.append(...parts, tail);
     return node;
   }

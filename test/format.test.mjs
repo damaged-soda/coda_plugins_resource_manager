@@ -1,7 +1,7 @@
 // view/format.mjs：大小、相对日期、完整日期、排序名称。日期都用本地时间构造，和时区、语言设置无关。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateText, formatDate, formatFullDate, formatSize, infoText, sizeText, sortName } from '../view/format.mjs';
+import { dateText, formatDate, formatFullDate, formatSize, infoText, sizeText, sortName, subText } from '../view/format.mjs';
 
 const at = (...parts) => new Date(...parts).getTime();
 
@@ -32,9 +32,14 @@ test('大小、日期、信息行：读不到的部分是 —，文件夹没有�
   assert.equal(sizeText(file), '1.5 KiB');
   assert.equal(dateText(file, now), '14:05');
   assert.equal(infoText(file), '1.5 KiB · 2026-11-05 14:05:00');
-  assert.equal(sizeText({ kind: 'dir', mtimeMs: file.mtimeMs }), '—');
-  assert.equal(sizeText({ kind: 'dir', size: 4096 }), '—', '文件夹不显示大小');
-  assert.equal(infoText({ kind: 'dir', mtimeMs: file.mtimeMs }), '— · 2026-11-05 14:05:00');
+  assert.equal(sizeText({ kind: 'dir', mtimeMs: file.mtimeMs }), '');
+  assert.equal(sizeText({ kind: 'dir', size: 4096 }), '', '文件夹不显示大小');
+  assert.equal(infoText({ kind: 'dir', size: 4096, mtimeMs: file.mtimeMs }), '2026-11-05 14:05:00', '文件夹只有完整修改时间');
+  assert.equal(infoText({ kind: 'dir' }), '', '文件夹读不到修改时间：空，不是 —');
+  assert.equal(dateText({ kind: 'dir' }, now), '');
+  assert.equal(subText({ kind: 'dir', mtimeMs: file.mtimeMs }, now), '14:05');
+  assert.equal(subText({ kind: 'dir' }, now), '');
+  assert.equal(subText(file, now), '14:05 · 1.5 KiB');
   assert.equal(infoText({ kind: 'file' }), '— · —');
   assert.equal(dateText({ kind: 'file', size: 1 }, now), '—');
   assert.equal(sizeText({ kind: 'file', size: 0 }), '0 B', '0 字节是有大小的');
