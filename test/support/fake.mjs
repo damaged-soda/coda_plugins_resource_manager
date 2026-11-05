@@ -1,4 +1,4 @@
-// 测试用的假 coda 和假 view：形状照 docs/plugins.md「插件宿主」，api、watch 可控。
+// 测试用的假 coda 和假 view：形状照插件宿主给的 coda 对象，api、watch 可控。
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,12 +18,14 @@ export function deferred() {
   return { promise, resolve, reject };
 }
 
+// 按时间算超时：高负载下事件循环慢，按次数会过早放弃；等到了立即返回。
+export const WAIT_MS = 30_000;
 export async function waitFor(predicate, what = '条件') {
-  for (let i = 0; i < 2000; i++) {
-    if (predicate()) return;
+  const deadline = Date.now() + WAIT_MS;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`等待超时：${what}`);
     await tick();
   }
-  throw new Error(`等待超时：${what}`);
 }
 
 // 让已经在途的 fs 操作和微任务都走完（用于「没有发出」类断言之前）。

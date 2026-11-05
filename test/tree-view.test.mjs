@@ -85,11 +85,11 @@ test('文件行：图标按扩展名，没有 aria-expanded，箭头槽还在（
   assert.equal(part(rowNamed(page, 'a.txt'), 'tail').children.length, 0);
 });
 
-test('链接尾标：指向内部的链接有箭头图标，title 不变；失效和其他是 dead，没有箭头也没有尾标', async t => {
+test('链接尾标：指向内部的链接有箭头图标；失效和其他是 dead，没有箭头也没有尾标', async t => {
   const { page } = await start(t);
   const link = rowNamed(page, 'to-file');
   assert.equal(part(link, 'tail').find(n => n.tagName === 'SVG').length, 1);
-  assert.equal(link.title, 'to-file');
+  assert.equal(link.title, 'to-file\n— · —', '路径，加上读不到时的 —');
   assert.equal(link.classList.contains('dead'), false);
   for (const [name, text] of [['gone', '指向工作目录外的链接，不能打开'], ['dev', '不能打开的文件']]) {
     const row = rowNamed(page, name);
@@ -101,12 +101,12 @@ test('链接尾标：指向内部的链接有箭头图标，title 不变；失�
   }
 });
 
-test('行的 DOM 只有一份：箭头、图标、名字、尾标，缩进走 --d', async t => {
+test('行的 DOM 只有一份：箭头、图标、名字（带第二行）、meta、尾标，缩进走 --d', async t => {
   const { page } = await start(t);
   rowNamed(page, 'src').dispatch('click');
   await flush();
   const row = rowNamed(page, 'x.js');
-  assert.deepEqual(row.children.map(node => node.className), ['chev', 'ico', 'name truncate', 'tail']);
+  assert.deepEqual(row.children.map(node => node.className), ['chev', 'ico', 'main', 'meta caption secondary', 'tail']);
   assert.equal(row.style.cssText, '--d: 1');
   assert.equal(rowNamed(page, 'a.txt').style.cssText, '--d: 0');
 });

@@ -9,6 +9,7 @@ import { tempDir } from './support/fake.mjs';
 // 页面收到的整条回答（含信封）按 UTF-8 字节算的大小。
 const pageBytes = (page, requestId = 'r'.repeat(64)) => Buffer.byteLength(JSON.stringify({ type: 'listed', generation: 12345, requestId, ...page }));
 const names = page => page.entries.map(entry => entry.name);
+const bare = page => page.entries.map(({ size, mtimeMs, ...entry }) => entry);
 
 async function listAll(root, path = '', options) {
   const pages = [];
@@ -42,7 +43,7 @@ test('链接：指向内部的按目标显示并带 link，指向外部和失效
   await symlink(join(base, 'outside.txt'), join(root, 'to-outside'));
   await symlink('nowhere', join(root, 'dangling'));
   const [page] = await listAll(root);
-  assert.deepEqual(page.entries, [
+  assert.deepEqual(bare(page), [
     { name: 'real-dir', kind: 'dir' }, { name: 'to-dir', kind: 'dir', link: true },
     { name: 'dangling', kind: 'link' }, { name: 'real.txt', kind: 'file' },
     { name: 'to-file', kind: 'file', link: true }, { name: 'to-outside', kind: 'link' },
@@ -53,7 +54,7 @@ test('名字含控制字符的条目只显示（other），不会变成可打开
   const root = await tempDir(t);
   await writeFile(join(root, 'bad\u0001name'), '');
   const [page] = await listAll(root);
-  assert.deepEqual(page.entries, [{ name: 'bad\u0001name', kind: 'other' }]);
+  assert.deepEqual(bare(page), [{ name: 'bad\u0001name', kind: 'other' }]);
 });
 
 test('分页：大量需要转义的名字，每页整条回答不超过 96 KiB，合起来不重不漏且有序', async t => {
@@ -109,8 +110,8 @@ test('错误：游标无效、路径越界、不是目录、不存在、条目�
   await writeFile(join(root, 'file'), '');
   await mkdir(join(root, 'sub'));
   const code = c => error => error.code === c;
-  await assert.rejects(listDirectory(root, '', 'not-a-cursor!'), code('invalid_cursor'));
-  await assert.rejects(listDirectory(root, '', Buffer.from('[7,"x"]').toString('base64url')), code('invalid_cursor'));
+  await assert.rejects(listDirectory(root, '', 'not-a-cursor!'), code('cursor_expired'));
+  await assert.rejects(listDirectory(root, '', Buffer.from('[7,"x"]').toString('base64url')), code('cursor_expired'));
   await assert.rejects(listDirectory(root, '..'), code('invalid_path'));
   await assert.rejects(listDirectory(root, 'file'), code('not_dir'));
   await assert.rejects(listDirectory(root, 'nope'), code('not_found'));

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdir, symlink, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, open, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readChunk } from '../lib/content.mjs';
-import { CHUNK_BYTES, IMAGE_LIMIT, MESSAGE_LIMIT, TEXT_LIMIT, messageSize } from '../view/protocol.mjs';
+import { CHUNK_BYTES, ErrorCode, IMAGE_LIMIT, MESSAGE_LIMIT, TEXT_LIMIT, messageSize } from '../view/protocol.mjs';
 import { tempDir } from './support/fake.mjs';
 
 async function readAll(root, path) {
@@ -96,4 +96,29 @@ test('错误：偏移无效、目录、越界和指向外部的链接、不存�
   await assert.rejects(readChunk(root, 'leak.txt', 0), code('outside_root'));
   await assert.rejects(readChunk(root, 'nope.txt', 0), code('not_found'));
   assert.equal((await readChunk(root, 'inner.txt', 0)).data, Buffer.from('a').toString('base64'));
+});
+
+test('校验之后目标被换成指向外面的链接：回答越界错误，不带外面文件的字节', async t => {
+  const root = await tempDir(t);
+  const outside = await tempDir(t);
+  await writeFile(join(root, 'a.txt'), 'inside');
+  await writeFile(join(outside, 'secret.txt'), 'TOP-SECRET-BYTES');
+  // 校验已经通过之后、真正打开之前，把目标换成链接
+  const swapping = async (file, flags) => {
+    await rm(file);
+    await symlink(join(outside, 'secret.txt'), file);
+    return open(file, flags);
+  };
+  await assert.rejects(readChunk(root, 'a.txt', 0, { open: swapping }), error => {
+    assert.equal(error.code, ErrorCode.OUTSIDE_ROOT);
+    assert.ok(!JSON.stringify(error).includes('TOP-SECRET'));
+    return true;
+  });
+});
+
+test('打开时没有被换：普通文件读取不变', async t => {
+  const root = await tempDir(t);
+  await writeFile(join(root, 'a.txt'), 'inside');
+  const chunk = await readChunk(root, 'a.txt', 0, { open });
+  assert.equal(Buffer.from(chunk.data, 'base64').toString(), 'inside');
 });

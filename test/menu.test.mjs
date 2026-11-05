@@ -20,7 +20,10 @@ const parts = page => ({
 const items = page => page.menu.find(node => node.tagName === 'BUTTON');
 const item = (page, label) => items(page).find(node => node.textContent === label);
 const pointerClick = node => { node.dispatch('pointerdown', { pointerId: 1, isPrimary: true }); node.dispatch('pointerup'); node.dispatch('click'); };
-const names = page => rowsOf(page).filter(node => node.classList.contains('entry')).map(node => node.textContent);
+// ⋯ 菜单的全部项：刷新、显示隐藏文件，（分隔线、小标题「排序」），四个排序项。
+const MORE_ITEMS = ['刷新', '显示隐藏文件', '名称', '种类', '日期', '大小'];
+const MORE_ROLES = ['menuitem', 'menuitemcheckbox', 'menuitemradio', 'menuitemradio', 'menuitemradio', 'menuitemradio'];
+const names = page => rowsOf(page).filter(node => node.classList.contains('entry')).map(node => node.find(part => part.classList.contains('name'))[0].textContent);
 
 test('iPhone 工具条：返回（仅横屏）、根目录名、⋯；⋯ 是图标按钮，有可访问名称和菜单属性', async t => {
   const { page } = await start(t);
@@ -30,7 +33,7 @@ test('iPhone 工具条：返回（仅横屏）、根目录名、⋯；⋯ 是图
   assert.equal(more.textContent, '');
   assert.equal(more.getAttribute('aria-haspopup'), 'menu');
   assert.equal(more.getAttribute('aria-expanded'), 'false');
-  assert.deepEqual(page.bar.children.map(node => node.tagName), ['BUTTON', 'SPAN', 'BUTTON'], '没有「刷新」「显示隐藏文件」的按钮，它们在菜单里');
+  assert.deepEqual(page.bar.children.map(node => node.tagName), ['BUTTON', 'SPAN', 'BUTTON'], '返回、根目录名、⋯；没有「刷新」「显示隐藏文件」「排序」的按钮，它们在菜单里');
 });
 
 test('根目录名随会话变，工具条跟着重画；没变就不重画', async t => {
@@ -62,14 +65,14 @@ test('根目录不可用时工具条仍在：名字为空，⋯ 能用', async t
   assert.equal(host.lists().length, before);
 });
 
-test('⋯ 菜单：两项，显示隐藏文件是带对勾的开关，选完关闭；刷新发出协议刷新并重新读目录', async t => {
+test('⋯ 菜单：刷新、显示隐藏文件，后者是带对勾的开关，再加排序一组；选完关闭，选完关闭；刷新发出协议刷新并重新读目录', async t => {
   const { page, host } = await start(t);
   const { more } = parts(page);
   more.dispatch('click');
   assert.ok(visible(page.menu));
   assert.equal(more.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件']);
-  assert.deepEqual(items(page).map(node => node.getAttribute('role')), ['menuitem', 'menuitemcheckbox']);
+  assert.deepEqual(items(page).map(node => node.textContent), MORE_ITEMS);
+  assert.deepEqual(items(page).map(node => node.getAttribute('role')), MORE_ROLES);
   assert.equal(item(page, '显示隐藏文件').getAttribute('aria-checked'), 'false');
   assert.equal(item(page, '显示隐藏文件').find(node => node.tagName === 'SVG').length, 0, '没开时没有对勾');
   assert.deepEqual(names(page), ['a.txt', 'b.txt'], '.git 被藏起来');
@@ -152,7 +155,7 @@ test('切会话时清掉 ⋯ 菜单；长按的路径菜单和 ⋯ 共用同一�
   pointerClick(parts(page).more);
   assert.equal(visible(page.menu), false);
   parts(page).more.dispatch('click');
-  assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件']);
+  assert.deepEqual(items(page).map(node => node.textContent), MORE_ITEMS);
   assert.equal(page.menu.find(node => node.classList.contains('menu-path')).length, 0, '⋯ 菜单没有路径标题');
 });
 
@@ -193,12 +196,12 @@ async function startMac(t) {
 const tapRow = page => rowNamed(page, 'a.txt').dispatch('click');
 const openMore = async (ctx, event = { id: 'more' }) => { ctx.press(event); await flush(); };
 
-test('Mac 按下「更多」：页面弹出菜单，两项，对勾不在，贴页面右上角', async t => {
+test('Mac 按下「更多」：页面弹出菜单，项和 iPhone 的 ⋯ 相同，隐藏文件的对勾不在，贴页面右上角', async t => {
   const ctx = await startMac(t);
   await openMore(ctx);
   const { page } = ctx;
   assert.ok(visible(page.menu));
-  assert.deepEqual(items(page).map(node => node.textContent), ['刷新', '显示隐藏文件']);
+  assert.deepEqual(items(page).map(node => node.textContent), MORE_ITEMS);
   assert.equal(item(page, '显示隐藏文件').getAttribute('role'), 'menuitemcheckbox');
   assert.equal(item(page, '显示隐藏文件').getAttribute('aria-checked'), 'false');
   assert.match(page.menu.style.left, /^max\(var\(--safe-left\), min\(220px,/, '右边缘 320 减去菜单宽 100');

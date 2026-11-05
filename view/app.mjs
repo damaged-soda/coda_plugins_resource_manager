@@ -1,11 +1,12 @@
 // 资源管理器的页面入口：消息收发、状态保留、工具栏。状态在 model.mjs，渲染在 tree.mjs 和 preview.mjs。
 import { EXIT, paintBar } from './bar.mjs';
 import { connect } from './connection.mjs';
+import { infoText, sortName } from './format.mjs';
 import { icon } from './icons.mjs';
 import { Model, STATE_LIMIT, noticeText, parseState, putSession, trimState } from './model.mjs';
 import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
-import { RootState } from './protocol.mjs';
+import { EntryKind, RootState, SortKey } from './protocol.mjs';
 import { mountTree, rootName } from './tree.mjs';
 
 const coda = window.coda;
@@ -22,12 +23,13 @@ let pending = { tree: null, preview: null };
 const conn = connect(coda, { handlers: { session: onSession, root: onRoot, changed: onChanged }, onStatus: () => schedule() });
 const model = new Model({ link: conn.link, onChange: () => schedule() });
 model.showHidden = persisted.hidden;
+model.sort = persisted.sort;
 const tree = mountTree($('tree'), model, {
   open: openFile,
   toggle: path => model.toggle(path),
   more: path => model.loadMore(path),
   retry: path => model.retry(path),
-  menu: (event, path) => pathMenu(event, path),
+  menu: (event, row) => pathMenu(event, row),
 }, { draggable: !isIOS, longPress: isIOS });
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
@@ -121,7 +123,7 @@ const toolbarItems = () => hasToolbar
     { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
     { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
   ];
-// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新和显示隐藏文件在 ⋯ 的菜单里。
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
 const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
@@ -137,11 +139,24 @@ function syncToolbar() {
 
 // 原生按钮没有 DOM 元素可以当锚点：用一个固定在页面右上角的假锚点，同时也是「谁打开的菜单」的标记。
 const TOOLBAR = { getBoundingClientRect: () => ({ right: window.innerWidth, bottom: 0 }) };
-// 「更多」菜单的内容只写这一处，iPhone 的 ⋯ 和 Mac 的原生按钮共用。
+// 「更多」菜单的内容只写这一处，iPhone 的 ⋯ 和 Mac 的原生按钮共用：刷新、显示隐藏文件，分隔线，小标题和平铺的四个排序项。
 const moreMenu = () => ({ items: [
   { label: '刷新', run: () => act('refresh') },
   { label: '显示隐藏文件', checked: model.showHidden, run: () => act('hidden') },
+  { separator: true },
+  { heading: '排序' },
+  ...Object.values(SortKey).map(key => ({ label: sortName(key), checked: key === model.sort, radio: true, run: () => changeSort(key) })),
 ] });
+
+// 换排序：旧的滚动位置对新顺序没有意义，待恢复的作废，回到顶部；排序是全局的，存进 persisted。选当前项什么都不做。
+function changeSort(sort) {
+  const before = model.sort;
+  model.setSort(sort);
+  if (model.sort === before) return; // 同值：什么都没换
+  persisted.sort = model.sort;
+  pending.tree = null;
+  tree.scrollTo(0);
+}
 
 function act(id, button) {
   if (id === EXIT.id) quiet(() => coda.close());
@@ -173,7 +188,7 @@ function saveNow() {
   const top = preview.scroll();
   putSession(persisted, session, {
     ...model.snapshot(),
-    scroll: { tree: pending.tree ?? tree.scroll(), top: pending.preview?.top ?? top.top, left: pending.preview?.left ?? top.left },
+    scroll: { tree: pending.tree ?? tree.scroll(), top: pending.preview?.top ?? top.top, left: pending.preview?.left ?? top.left, sort: model.sort },
   });
   persisted = trimState(persisted, session);
   // setState 超限会同步抛错：再收紧一次，仍失败就放弃这次，不影响界面。
@@ -183,17 +198,22 @@ quiet(() => coda.on('visibility', visible => { if (!visible) saveNow(); }));
 $('tree').addEventListener('scroll', queueSave, { passive: true });
 preview.onScroll(queueSave);
 
-// ---- 菜单：Mac 右键、iPhone 长按出复制路径，iPhone 的 ⋯ 和 Mac 的原生「更多」出刷新和显示隐藏文件 ----
-// anchor：按钮元素或同样有 getBoundingClientRect 的假锚点（菜单贴在它下面、右对齐）或 { clientX, clientY } 的点。items：[{ label, run, checked? }]，
-// checked 不是 undefined 的是带对勾的开关项。title 写在菜单顶上：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全。
+// ---- 菜单：Mac 右键、iPhone 长按出复制路径，iPhone 的 ⋯ 和 Mac 的原生「更多」出刷新、显示隐藏文件和排序 ----
+// anchor：按钮元素或同样有 getBoundingClientRect 的假锚点（菜单贴在它下面、右对齐）或 { clientX, clientY } 的点。
+// items：[{ label, run, checked?, radio? } | { separator: true } | { heading }]，checked 不是 undefined 的带对勾（radio 的是单选，其余是开关）；
+// 分隔线和小标题不是菜单项，不可点。title 写在菜单顶上：iPhone 没有 title 悬停，长文件名在行里被截断，这里看全；detail 是它下面的一行小字。
 // 位置按安全区夹住（横屏时客户端不替页面留）；offsetWidth 在显示后才量得到。
 const menu = $('menu');
 let opener = null; // 打开菜单的按钮；用点打开的没有
-function openMenu(anchor, { title, items }) {
+function openMenu(anchor, { title, detail, items }) {
   hideMenu();
-  const head = title === undefined ? [] : [Object.assign(document.createElement('p'), { className: 'menu-path secondary', textContent: title })];
+  const head = [];
+  if (title !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-path secondary', textContent: title }));
+  if (detail !== undefined) head.push(Object.assign(document.createElement('p'), { className: 'menu-info secondary caption', textContent: detail }));
   const checkable = items.some(item => item.checked !== undefined); // 有开关项时，每一项都留出对勾的位置，文字才对齐
-  menu.replaceChildren(...head, ...items.map(({ label, run, checked }) => {
+  menu.replaceChildren(...head, ...items.map(({ label, run, checked, radio, separator, heading }) => {
+    if (separator) return Object.assign(document.createElement('hr'), { className: 'menu-sep' });
+    if (heading !== undefined) return Object.assign(document.createElement('p'), { className: 'menu-head secondary caption', textContent: heading });
     const button = document.createElement('button'), name = document.createElement('span');
     name.textContent = label;
     if (checkable) {
@@ -203,7 +223,7 @@ function openMenu(anchor, { title, items }) {
       button.append(mark);
     }
     button.append(name);
-    button.setAttribute('role', checked === undefined ? 'menuitem' : 'menuitemcheckbox');
+    button.setAttribute('role', checked === undefined ? 'menuitem' : radio ? 'menuitemradio' : 'menuitemcheckbox');
     if (checked !== undefined) button.setAttribute('aria-checked', String(checked));
     button.addEventListener('click', () => { run(); hideMenu(); });
     return button;
@@ -215,9 +235,10 @@ function openMenu(anchor, { title, items }) {
   menu.style.top = `max(var(--safe-top), min(${y}px, calc(100vh - var(--safe-bottom) - ${menu.offsetHeight + 4}px)))`;
   if (box) { opener = anchor; opener.setAttribute?.('aria-expanded', 'true'); }
 }
-const pathMenu = (event, path) => openMenu(event, { title: path, items: [
-  { label: '复制相对路径', run: () => coda.copy(path) },
-  { label: '复制绝对路径', run: () => coda.copy(`${model.root.path}/${path}`) },
+// 行菜单：路径下面一行 大小 · 完整修改时间（文件夹只有修改时间，读不到就没有这一行）；指向外面的链接和不能打开的条目没有元数据，不显示这一行。
+const pathMenu = (event, row) => openMenu(event, { title: row.path, detail: row.kind === EntryKind.LINK || row.kind === EntryKind.OTHER ? undefined : infoText(row) || undefined, items: [
+  { label: '复制相对路径', run: () => coda.copy(row.path) },
+  { label: '复制绝对路径', run: () => coda.copy(`${model.root.path}/${row.path}`) },
 ] });
 function hideMenu() {
   menu.hidden = true;
@@ -249,7 +270,8 @@ function onSession(data) {
   clearTimeout(hintTimer);
   $('hint').hidden = true;
   const saved = persisted.sessions[data.session] ?? null;
-  pending = saved ? { tree: saved.scroll.tree, preview: { top: saved.scroll.top, left: saved.scroll.left } } : { tree: null, preview: null };
+  // 目录树的滚动位置是按当时的排序存的；排序是全局的，在别的会话换过就对不上，等内容到了回到顶部。
+  pending = saved ? { tree: saved.scroll.sort === model.sort ? saved.scroll.tree : 0, preview: { top: saved.scroll.top, left: saved.scroll.left } } : { tree: null, preview: null };
   model.receive(data, saved);
 }
 

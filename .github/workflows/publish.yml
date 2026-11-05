@@ -12,7 +12,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -67,15 +67,25 @@ jobs:
             }"
       - if: steps.decide.outputs.publish == 'true'
         run: npm publish --access public
+      # npm can take about 10 minutes to show a release it has already accepted, so wait up to 15.
+      # Each query and the whole step have a deadline. A timeout still fails the job (an unconfirmed release is not
+      # reported as success), but the summary says the release was accepted so nobody publishes it again.
+      # Nothing here retries the publish.
       - if: steps.decide.outputs.publish == 'true'
         name: Confirm the release
+        timeout-minutes: 17
+        env:
+          SPEC: ${{ steps.decide.outputs.spec }}
         run: |
-          for attempt in 1 2 3 4 5 6; do
-            if [ "$(npm view "${{ steps.decide.outputs.spec }}" version 2>/dev/null)" != "" ]; then
-              echo "已发布 ${{ steps.decide.outputs.spec }}。" >> "$GITHUB_STEP_SUMMARY"
+          deadline=$((SECONDS + 900))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            seen=$(timeout 30 npm view "$SPEC" version 2>/dev/null || true)
+            if [ -n "$seen" ]; then
+              echo "已发布 $SPEC。" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             sleep 20
           done
-          echo "发布命令成功，但 2 分钟内 registry 还读不到 ${{ steps.decide.outputs.spec }}" >&2
+          echo "发布已接受，公开确认超时，不要重发：$SPEC 的发布命令已成功，但 15 分钟内 registry 还读不到它。先到 npm 上查这个版本，不要重跑工作流。" >> "$GITHUB_STEP_SUMMARY"
+          echo "发布命令成功，但 15 分钟内 registry 还读不到 $SPEC" >&2
           exit 1

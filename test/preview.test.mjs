@@ -4,7 +4,8 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readChunk } from '../lib/content.mjs';
-import { formatSize, lineCount, readFile } from '../view/preview.mjs';
+import { formatSize } from '../view/format.mjs';
+import { lineCount, readFile } from '../view/preview.mjs';
 import { TEXT_LIMIT } from '../view/protocol.mjs';
 import { tempDir } from './support/fake.mjs';
 

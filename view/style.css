@@ -1,4 +1,4 @@
-/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（docs/plugins.md「视图」）。 */
+/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（插件视图的主题变量）。 */
 :root {
   --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
   --line: var(--coda-separator, rgba(0,0,0,.1));
@@ -35,7 +35,7 @@ p { margin: 0; }
 
 /* 页内工具条：iPhone 树页在顶部（返回、根目录名、⋯），文件页在底部（.bottom：返回、刷新、复制路径）。没有 coda.toolbar 的其他平台（harness）是一条文字按钮。 */
 .bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-.bar button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
+.bar button { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
 .bar button.on { color: var(--coda-accent, #0a84ff); }
 .bar svg { display: block; flex: none; }
 .bar-title { padding: 0 8px; font-weight: 600; }
@@ -43,7 +43,10 @@ p { margin: 0; }
 
 /* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。
    Mac 是侧栏列表：左右缩进 8 点，行有圆角，选中用 --coda-selection。 */
+/* 标题行：根目录名，随内容滚走。它在滚动容器里占着自己的高度，tree.mjs 把 spacer 的 offsetTop 扣掉。 */
 .section { padding: 10px 16px 4px; font-size: .85em; font-weight: 600; color: var(--coda-secondary, #6e6e73); cursor: default; }
+/* 行宽按 #tree 的宽度查询：窄于约 220 点时 Mac 的 meta 不显示。 */
+#tree { container: tree / inline-size; }
 .spacer { position: relative; margin: 0 8px; }
 .win { position: absolute; left: 0; right: 0; top: 0; }
 /* 缩进按行的 --d（深度）算，iPhone 的分隔线起点也用它。 */
@@ -60,7 +63,11 @@ p { margin: 0; }
 .ico { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
 .ico svg { display: block; }
 .row.dir .ico { color: var(--coda-accent, #0a84ff); }
-.name { flex: 1 1 auto; min-width: 0; }
+.main { flex: 1 1 auto; min-width: 0; }
+.name { display: block; }
+.sub { display: none; }
+.meta { flex: none; padding-left: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@container tree (max-width: 220px) { .meta { display: none; } }
 .tail { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
 .tail:empty { display: none; }
 .tail svg { display: block; }
@@ -85,12 +92,16 @@ button.icon svg { display: block; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
 #notice:focus { outline: none; }
-.menu { position: fixed; z-index: 10; min-width: 150px; padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
+.menu { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - var(--safe-left) - var(--safe-right) - 8px)); padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff)); }
 .menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
 .check { flex: none; display: grid; place-items: center; width: 16px; color: var(--coda-accent, #0a84ff); }
 .check svg { display: block; }
-.menu-path { max-width: 280px; padding: 4px 10px 6px; overflow-wrap: anywhere; }
+/* 菜单宽度随内容，上限见 .menu：路径超过上限折行，大小 · 完整修改时间不折。 */
+.menu-path { padding: 4px 10px 6px; overflow-wrap: anywhere; }
+.menu-info { padding: 0 10px 6px; margin-top: -4px; white-space: nowrap; }
+.menu-sep { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
+.menu-head { padding: 4px 10px 2px; font-weight: 600; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
 .hint { position: fixed; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 10;
@@ -105,9 +116,9 @@ button.icon svg { display: block; }
   .menu button:hover { background: var(--coda-selection, var(--hover)); }
 }
 
-/* iPhone：行和按钮至少 44 点；行高在这里定，tree.mjs 量 .row 得到，不另写一份。
+/* iPhone：行和按钮至少 44 点；行高 58 点（两行：名字、日期 · 大小）在这里定，tree.mjs 量 .row 得到，不另写一份。
    目录树是 Coda 卡片外形的分组列表：.spacer 就是卡片（高度已等于全部行高），首尾圆角不用逐行判断。 */
-.coda-ios { --row-h: 44px; --indent: 20px; --pad: 16px; }
+.coda-ios { --row-h: 58px; --indent: 20px; --pad: 16px; }
 .coda-ios .section { display: none; } /* 根目录名归页内工具条 */
 .coda-ios .spacer { margin: 8px 16px; overflow: hidden; border-radius: var(--coda-radius-card, 12px); background: var(--coda-card, var(--coda-secondary-background, #fff)); }
 /* 描边用伪元素：不占尺寸，spacer 加 border 会让内容区少 2 点，末行被裁。 */
@@ -119,6 +130,9 @@ button.icon svg { display: block; }
 .coda-ios .row { -webkit-touch-callout: none; } /* 长按由页面接管，不弹系统菜单；选择和拖动另外已关 */
 .coda-ios .row.entry:active { background: var(--hover); }
 .coda-ios .ico svg { width: 22px; height: 22px; }
+.coda-ios .main { display: flex; flex-direction: column; justify-content: center; } /* 没有第二行的条目，名字垂直居中 */
+.coda-ios .sub { display: block; }
+.coda-ios .meta { display: none; }
 .coda-ios .chev { order: 9; width: 14px; }
 .coda-ios .row.dir .chev { color: var(--coda-accent, #0a84ff); }
 .coda-ios .row.file .chev svg { visibility: visible; }
@@ -133,6 +147,7 @@ button.icon svg { display: block; }
 .coda-ios .phead button { padding: 0 8px; }
 .coda-ios .code { font-size: .8em; } /* 窄屏多看些：17 点下约 13.6 点 */
 .coda-ios .menu button { padding: 0 12px; }
+.coda-ios .menu-head { padding: 6px 12px 2px; }
 
 /* 横屏：客户端隐藏导航栏，页面自己给返回。近似 verticalSizeClass 的判断，不等价（iPad、Duo 不单独适配）。 */
 .bar .exit { display: none; }
