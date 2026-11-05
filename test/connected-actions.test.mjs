@@ -69,6 +69,19 @@ test('右键添加：草稿接口不可用时回答 draft_failed，页面改成�
   assert.ok(page.hint.classList.contains('warn'));
 });
 
+test('右键添加：保存的回答不带 draft（接口形状异常）时页面改成复制，不提示已添加', async t => {
+  const { page, fake, copied, saves } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
+  const api = fake.coda.api;
+  fake.coda.api = async (path, body) => (path === draftPath('A') && body !== undefined ? (saves.push(body), undefined) : api(path, body));
+  rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  choose(page, '添加到聊天');
+  await waitFor(() => page.hint.textContent === '没能写入输入框，已复制', '失败提示');
+  assert.equal(saves.length, 1, '保存过一次，没重试');
+  assert.deepEqual(copied, ['src']);
+  assert.notEqual(page.hint.textContent, '已添加到输入框');
+  assert.ok(page.hint.classList.contains('warn'));
+});
+
 test('属性：文件和文件夹经真实模块；文件夹的大小是子项之和，项数含子目录', async t => {
   const { page, backs } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
   const rows = () => Object.fromEntries(page.info.find(node => node.classList.contains('irow')).map(row => [row.children[0].textContent, row.children[1].textContent]));

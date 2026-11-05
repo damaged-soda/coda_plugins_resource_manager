@@ -128,6 +128,16 @@ test('addText：接口抛错、回答形状不对、文字无效都是 draft_fai
   assert.equal((await caught(addText(saveFails, 'A', { text: 'p', block: false }))).code, 'draft_failed');
 });
 
+test('addText：保存的回答没有合法的 draft（undefined、null、{}、{ draft: {} }）→ draft_failed，不算写入成功', async () => {
+  for (const reply of [undefined, null, {}, { draft: {} }]) {
+    const posts = [];
+    const api = { api: async (path, body) => { if (body === undefined) return draftOf('hi', [], 2); posts.push(body); return reply; } };
+    const error = await caught(addText(api, 'A', { text: 'p', block: false }));
+    assert.equal(error?.code, 'draft_failed', JSON.stringify(reply));
+    assert.equal(posts.length, 1, '不重试');
+  }
+});
+
 test('addText：内容和服务端相同时接口直接回 { draft }，算成功', async () => {
   const api = { api: async (path, body) => (body ? { draft: { text: body.text, attachments: [], revision: 1 } } : draftOf('p ')) };
   assert.equal(await addText(api, 'A', { text: 'p', block: false }), true);
