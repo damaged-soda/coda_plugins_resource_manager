@@ -12,7 +12,8 @@ const DEBUG_PORT = 9334, STARTUP_MS = 60000;
 const FILLER = 120; // 根目录里排在最后的一批文件，撑出第二页以后的内容
 const LONG_LINES = 300; // notes.txt 的行数：文件页要滚得动，才能看最后一行是否被底部工具条挡住
 const LONG_NAME = 'a-very-long-file-name-that-cannot-fit-in-a-narrow-sidebar.md'; // 名字截断时 meta 不缩
-const ROOT_ROWS = 4 + 3 + 1 + 2 + FILLER; // 四个目录、三个文件、一个长名字、两个链接、填充
+const HIDDEN_NAME = '.DS_Store'; // 页面默认藏起来的名字之一：「显示隐藏文件」打开后它才出现，这就是选完之后该等到的样子
+const ROOT_ROWS = 4 + 3 + 1 + 2 + FILLER; // 四个目录、三个文件、一个长名字、两个链接、填充；HIDDEN_NAME 默认被页面藏起来，不算
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // 先建临时目录，之后所有资源都在 try/finally 里创建，失败时一并清理。
@@ -53,7 +54,18 @@ const cleanup = async () => {
 let id = 0; const waiting = new Map();
 const send = (method, params = {}) => new Promise((resolve, reject) => { waiting.set(++id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
 const evaluate = async expr => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
-const until = async (expr, what) => { for (let i = 0; i < 50; i++) { if (await evaluate(expr)) return; await wait(100); } throw new Error(`等不到：${what}`); };
+// 等条件成立：按真实时间算截止，不按次数。机器忙的时候目录请求和重绘会慢，固定几秒的等待会假失败；等不到就报出在等什么。
+const UNTIL_MS = 30000;
+const until = async (expr, what) => {
+  const deadline = Date.now() + UNTIL_MS;
+  for (;;) {
+    if (await evaluate(expr)) return;
+    if (Date.now() >= deadline) throw new Error(`等不到：${what}（等了 ${UNTIL_MS / 1000} 秒）`);
+    await wait(50);
+  }
+};
+// 页面画完两帧：滚动事件在帧的开头派发、先于 requestAnimationFrame 的回调，所以滚动之后画两帧，滚动引起的重画和关菜单都已经发生。
+const frames = () => within(evaluate(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`), 10000, '等页面画两帧');
 
 async function start() {
   // ---- 假工作目录 ----
@@ -63,7 +75,7 @@ async function start() {
   await Promise.all([
     touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'),
     touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
-    touch(LONG_NAME), ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
+    touch(LONG_NAME), touch(HIDDEN_NAME), ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
   ]);
   // 修改日期有今年和往年的，今天的是刚建的：三种相对格式都能看到。
   await utimes(join(fixture, 'LICENSE'), new Date(2025, 2, 4), new Date(2025, 2, 4, 10, 0));
@@ -91,32 +103,64 @@ async function start() {
   ws.addEventListener('close', () => { for (const { reject } of waiting.values()) reject(new Error('CDP 连接断开')); waiting.clear(); });
 }
 
+// 页面发出的请求（带 requestId 的消息）和它们的回答：记下已发出的个数和还没回答的编号，「请求都有了回答」就是目录请求和重绘都完成的信号。
+// 回答的监听在捕获阶段先于页面自己的处理，但页面处理在同一个任务里完成，下一条 evaluate 到达时重绘已经发生。
+const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__rpc = { sent: 0, open: new Set() }, post = coda.postMessage;
+  coda.postMessage = message => { if (message?.requestId) { rpc.sent++; rpc.open.add(message.requestId); } return post(message); };
+  addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); }, true); })()`;
 const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 async function open(size, platform, theme, { keep = false, state = null } = {}) {
   const [w, h, safe] = SIZES[size];
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
-  const url = `${serverUrl}view/index.html?platform=${platform}&theme=${theme}&safe=${safe}&t=${Date.now()}`;
-  if (!keep) { await send('Page.navigate', { url: `${serverUrl}view/index.html` }); await wait(300); await evaluate('coda.setState = () => {}; sessionStorage.clear()'); }
+  const stamp = Date.now(), url = `${serverUrl}view/index.html?platform=${platform}&theme=${theme}&safe=${safe}&t=${stamp}`;
+  if (!keep) {
+    await send('Page.navigate', { url: `${serverUrl}view/index.html` });
+    // 等空白页（没有查询参数）载入：还停在上一页时，下面的清理会落在旧页上，新页离开时的保存又把状态写回来。
+    await until(`location.pathname === '/view/index.html' && location.search === '' && document.readyState !== 'loading' && typeof coda !== 'undefined'`, '空白页载入');
+    await evaluate('coda.setState = () => {}; sessionStorage.clear()');
+  }
   if (state) await evaluate(`sessionStorage.setItem('harness-state:files', ${JSON.stringify(JSON.stringify(state))})`); // 空白页离开时的 pagehide 不能再把状态存回去
   await send('Page.navigate', { url });
+  // navigate 返回时新页还没接手：只查行会被上一页（它的行还在）骗过去，要先等地址里的时间戳是新页的。
+  await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入');
   await until(`document.querySelectorAll('.row.entry').length > 0`, '目录树出现');
+  await evaluate(trackRequests);
 }
 // 文件页：query 是额外的参数；等正文或说明区出现。
 async function openFile(size, theme, query = 'session=A&path=notes.txt') {
   const [w, h, safe] = SIZES[size];
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
-  await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${Date.now()}` });
+  const stamp = Date.now();
+  await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${stamp}` });
+  await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入'); // 同 open：不能让上一页的正文骗过下面的等待
   await until(`document.querySelector('.text') || document.querySelector('#notice:not(.off) p')`, '文件页出现');
 }
-// 打开 ⋯ 菜单：iPhone 点页内的 ⋯，Mac 照控制页的方式发 { harness: 'toolbar', id: 'more' }。
-const openMore = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()` : `postMessage({ harness: 'toolbar', id: 'more' }, '*')`);
-// 在 ⋯ 菜单里选一项（刷新、显示隐藏文件、排序的四项），等目录树按新顺序重画。
-const pick = async (label, platform = 'mac') => {
+// ⋯ 菜单：iPhone 点页内的 ⋯（同步），Mac 照控制页的方式发 { harness: 'toolbar', id: 'more' }（页面收到消息才处理）。
+// 返回时消息已经处理完，菜单已经开了（或再按一次关了）。
+const openMore = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
+  : `new Promise(resolve => { const seen = event => { if (event.data?.harness !== 'toolbar') return; removeEventListener('message', seen); resolve(); }; addEventListener('message', seen); postMessage({ harness: 'toolbar', id: 'more' }, '*'); })`);
+const menuClosed = `document.getElementById('menu').hidden`;
+// 页面发出的请求都有了回答。
+const settled = what => until(`window.__rpc.open.size === 0`, `${what}：页面发出的请求都有了回答`);
+// 在 ⋯ 菜单里选一项，等到它真正做完：菜单关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
+const pick = async (label, platform = 'mac', { done = null, what = '' } = {}) => {
   await openMore(platform);
-  await evaluate(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === '${label}').click()`);
-  await wait(500);
+  const found = await evaluate(`(() => { const item = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
+  if (!found) throw new Error(`菜单里没有「${label}」这一项`);
+  await until(menuClosed, `选「${label}」后菜单关闭`);
+  if (done) await until(done, what);
+  await settled(`选「${label}」后`);
 };
+// 前 12 个文件的顺序：换排序之后，目录树画完新顺序它就变了。
+const fileOrder = `[...document.querySelectorAll('.row.file .name')].slice(0, 12).map(x => x.textContent).join('|')`;
+// 换排序：等到文件的顺序和选之前不同（要求新排序的顺序不同于旧的）。
+const pickSort = async (label, platform = 'mac') => {
+  const before = await evaluate(fileOrder);
+  await pick(label, platform, { done: `${fileOrder} !== ${JSON.stringify(before)}`, what: `目录树按「${label}」重画（文件的顺序变了）` });
+};
+// 选「显示隐藏文件」：等到隐藏文件出现在目录树里。
+const pickHidden = platform => pick('显示隐藏文件', platform, { done: `[...document.querySelectorAll('.row.file .name')].some(x => x.textContent === '${HIDDEN_NAME}')`, what: `隐藏文件 ${HIDDEN_NAME} 出现在目录树里` });
 const shoot = async name => { await wait(300); await writeFile(join(shots, `${name}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')); };
 
 const failures = [];
@@ -136,10 +180,11 @@ try {
   await open('mac', 'mac', 'light');
   check('Mac：有分区标题', await evaluate(`document.querySelector('.section')?.textContent === 'demo-project' && document.querySelector('.section').getClientRects().length > 0`));
   const target = await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = p.clientHeight * 1.5 + 13; p.dispatchEvent(new Event('scroll')); return p.scrollTop; })()`);
-  await wait(700); // 保存的定时器 300 毫秒
+  // 滚动之后 300 毫秒的定时器才存状态：等到存下的位置就是这个值，再重新载入。
+  await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.scroll?.tree === ${target})`, '滚动位置存进保存的状态');
   await open('mac', 'mac', 'light', { keep: true });
   await until(`document.getElementById('tree').scrollTop > 0`, '恢复滚动位置');
-  await wait(300);
+  await frames();
   check('Mac：有标题时恢复到第二页深处', (await evaluate(`document.getElementById('tree').scrollTop`)) === target, `存了 ${target}`);
   check('Mac：恢复后视口里每一点都有行', (await evaluate(covered)).length === 0, JSON.stringify(await evaluate(covered)));
 
@@ -167,7 +212,7 @@ try {
   check('Mac：标题行随内容滚走（不吸顶），容器顶那一点的真实行序号对得上，标题里没有按钮', scrolled.scroll > 0 && scrolled.gone && scrolled.position === 'static' && scrolled.hit === scrolled.expected
     && scrolled.top0 === 0 && scrolled.top7 === -7 && scrolled.top13 === -13 && scrolled.buttons === 0, JSON.stringify(scrolled));
   // 滚到最底：最后一行完整可见，没有空白。
-  const bottom = await evaluate(`(async () => { const p = document.getElementById('tree'); p.scrollTop = p.scrollHeight; p.dispatchEvent(new Event('scroll')); await new Promise(r => setTimeout(r, 200));
+  const bottom = await evaluate(`(async () => { const p = document.getElementById('tree'); p.scrollTop = p.scrollHeight; p.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const last = [...document.querySelectorAll('.row')].at(-1).getBoundingClientRect(), pr = p.getBoundingClientRect(); return { lastBottom: last.bottom, paneBottom: pr.bottom, text: [...document.querySelectorAll('.row')].at(-1).textContent }; })()`);
   check('Mac：滚到底，最后一行完整在容器里', bottom.text.includes('zz-119') && bottom.lastBottom <= bottom.paneBottom + 0.5, JSON.stringify(bottom));
 
@@ -183,7 +228,7 @@ try {
   check('Mac：滚动位置为 0 时第一行紧挨标题，没被遮挡', await evaluate(`(() => { const sec = document.querySelector('.section').getBoundingClientRect(), row = document.querySelector('.row').getBoundingClientRect(); return row.top >= sec.bottom - 0.01 && row.top - sec.bottom < 1; })()`));
   check('Mac：13px 时实际行高 26', (await rowHeight()) === 26, String(await rowHeight()));
   await evaluate(`postMessage({ harness: 'theme', kind: 'dark', fontSize: '20px' }, '*')`);
-  await wait(300);
+  await until(`document.documentElement.style.getPropertyValue('--coda-font-size') === '20px'`, '字号 20px 生效'); // 主题消息处理时同步重新量行高
   check('Mac：字号改 20px 后实际行高 40（字号真的生效了）', (await rowHeight()) === 40, String(await rowHeight()));
   await rowCheck('Mac 换深色并改字号后');
   await open('portrait', 'ios', 'light');
@@ -191,7 +236,7 @@ try {
   check('iPhone：行高 58', (await evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`)) === 58);
   check('iPhone：不显示分区标题', await evaluate(`getComputedStyle(document.querySelector('.section')).display === 'none'`));
   await evaluate(`postMessage({ harness: 'theme', kind: 'dark' }, '*')`);
-  await wait(300);
+  await until(`document.documentElement.classList.contains('coda-dark')`, '换成深色');
   await rowCheck('iPhone 换深色后');
 
 
@@ -219,7 +264,7 @@ try {
   for (const size of ['portrait', 'landscape']) {
     await open(size, 'ios', 'light');
     const end = await evaluate(`(async () => { const p = document.getElementById('tree'); p.scrollTop = p.scrollHeight; p.dispatchEvent(new Event('scroll'));
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       const rows = [...document.querySelectorAll('.row')], last = rows.at(-1).getBoundingClientRect(), card = document.querySelector('.spacer'), c = card.getBoundingClientRect(), pane = p.getBoundingClientRect();
       return { lastText: rows.at(-1).textContent, lastH: last.height, inCard: last.bottom <= c.bottom + 0.01, cardFits: card.scrollHeight <= card.clientHeight, inPane: last.bottom <= pane.bottom + 0.01, cardBottom: c.bottom, paneBottom: pane.bottom }; })()`);
     check(`iPhone ${size}：卡片末行完整可见`, end.lastText.includes('zz-119') && end.lastH === 58 && end.inCard && end.cardFits && end.inPane, JSON.stringify(end));
@@ -239,7 +284,7 @@ try {
     check(`iPhone ${size}：${land ? '返回、刷新、复制路径' : '刷新、复制路径（返回只在横屏）'}都可见，各至少 44 点，完整在工具条里`,
       JSON.stringify(bar.names) === JSON.stringify(land ? ['返回', '刷新', '复制路径'] : ['刷新', '复制路径']) && bar.heights.every(x => x >= 44) && bar.widths.every(x => x >= 44) && bar.inside, JSON.stringify(bar));
     check(`iPhone ${size}：预览面板不重复留安全区`, bar.previewPad === '0px', bar.previewPad);
-    const end = await evaluate(`(async () => { const body = document.querySelector('.pbody'); body.scrollTop = body.scrollHeight; await new Promise(r => setTimeout(r, 100));
+    const end = await evaluate(`(async () => { const body = document.querySelector('.pbody'); body.scrollTop = body.scrollHeight; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       const text = document.querySelector('.text').getBoundingClientRect(), pane = body.getBoundingClientRect(), bar = document.getElementById('bar').getBoundingClientRect();
       return { textBottom: text.bottom, paneBottom: pane.bottom, barTop: bar.top, lines: document.querySelector('.text').textContent.trim().split('\\n').length }; })()`);
     check(`iPhone ${size}：代码区滚到底，最后一行在工具条上方`, end.lines === LONG_LINES && end.textBottom <= end.barTop + 0.5 && end.paneBottom <= end.barTop + 0.5, JSON.stringify(end));
@@ -288,7 +333,7 @@ try {
       moreOk(menu, { sl, sr }) && menu.heights.every(x => x >= 44) && expanded === 'true' && menu.width <= OLD_WIDTH.ios, JSON.stringify(menu));
     await openMore('ios'); // 没有 pointerdown 的再次激活，同键盘
     check(`iPhone ${size} ${theme}：再次激活 ⋯ 只关闭`, await evaluate(`document.getElementById('menu').hidden && document.querySelector('[aria-label="更多"]').getAttribute('aria-expanded') === 'false'`));
-    await pick('显示隐藏文件', 'ios');
+    await pickHidden('ios');
     await openMore('ios');
     const hiddenOn = await evaluate(menuBox);
     check(`iPhone ${size} ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, moreOk(hiddenOn, { sl, sr, hidden: true }), JSON.stringify(hiddenOn));
@@ -307,13 +352,13 @@ try {
     await shoot(`mac-sidebar-${theme}-menu`);
     await openMore('mac');
     check(`Mac ${theme}：再按一次「更多」只关闭`, await evaluate(`document.getElementById('menu').hidden`));
-    await pick('显示隐藏文件');
+    await pickHidden('mac');
     await openMore('mac');
     const on = await evaluate(menuBox);
     check(`Mac ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, moreOk(on, { hidden: true }), JSON.stringify(on));
     if (theme === 'dark') await shoot('mac-sidebar-dark-menu-hidden-on');
     await evaluate(`document.getElementById('tree').scrollTop = 30`);
-    await wait(100);
+    await frames(); // 原生的滚动事件在下一帧派发
     check(`Mac ${theme}：菜单开着时滚动目录树，菜单关闭`, await evaluate(`document.getElementById('menu').hidden`));
     await openMore('mac');
     await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
@@ -342,9 +387,17 @@ try {
   // 换排序：选「大小」后回到顶部、按新顺序（最大的文件在前）重画；选当前项什么都不做，不滚动。
   await open('mac', 'mac', 'light');
   await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = 300; p.dispatchEvent(new Event('scroll')); })()`);
+  // 「什么都没发生」没有完成信号可等，所以不靠睡一会儿碰运气：选之后的同步效果（滚动、请求个数、顺序）立刻看；
+  // 再做一个有明确完成信号的操作（刷新，等它发出请求并全部有了回答），确认这一整段里的变化都已落地之后，位置和顺序仍然没变。
+  const stateNow = `({ scroll: document.getElementById('tree').scrollTop, order: ${fileOrder}, sent: window.__rpc.sent })`;
+  const before = await evaluate(stateNow);
   await pick('名称');
-  check('Mac：选当前排序项什么都不做，滚动位置不变', (await evaluate(`document.getElementById('tree').scrollTop`)) === 300);
-  await pick('大小');
+  const afterPick = await evaluate(stateNow);
+  await pick('刷新', 'mac', { done: `window.__rpc.sent > ${afterPick.sent}`, what: '刷新发出了请求' });
+  const afterRefresh = await evaluate(stateNow);
+  check('Mac：选当前排序项什么都不做，滚动位置不变', before.scroll === 300 && afterPick.scroll === 300 && afterPick.sent === before.sent && afterPick.order === before.order
+    && afterRefresh.scroll === 300 && afterRefresh.order === before.order, JSON.stringify({ before, afterPick, afterRefresh }));
+  await pickSort('大小');
   const bySize = await evaluate(`({ top: document.getElementById('tree').scrollTop, firstFile: document.querySelector('.row.file .name')?.textContent, firstDir: document.querySelector('.row.dir .name')?.textContent })`);
   // latest-notes 是指向 notes.txt 的链接，大小相同，平手按名字，所以它在前。
   check('Mac：选「大小」回到顶部，文件夹在前，最大的文件排在文件的最前', bySize.top === 0 && bySize.firstDir === 'assets' && bySize.firstFile === 'latest-notes', JSON.stringify(bySize));
@@ -409,9 +462,9 @@ try {
     // 按日期、按大小排序，⋯ 菜单打开的样子（Mac）。
     await open('mac', 'mac', theme);
     await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('src')).click()`);
-    await pick('日期');
+    await pickSort('日期');
     await shoot(`mac-sidebar-date-${theme}`);
-    await pick('大小');
+    await pickSort('大小');
     await shoot(`mac-sidebar-size-${theme}`);
     await openMore('mac');
     await shoot(`mac-sidebar-size-${theme}-menu`);
@@ -424,23 +477,25 @@ try {
       await shoot(`ios-${size}-${theme}-menu`);
       // 长按一行：菜单里路径下面有 大小 · 完整修改时间。
       await evaluate(`document.getElementById('menu').hidden = true`);
-      const held = await evaluate(`(async () => { const row = [...document.querySelectorAll('.row.entry')].find(r => r.textContent.includes('LICENSE')), r = row.getBoundingClientRect();
-        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.left + 80, clientY: r.top + 20 })); await new Promise(x => setTimeout(x, 700));
-        const m = document.getElementById('menu').getBoundingClientRect(); return { shown: !document.getElementById('menu').hidden, path: document.querySelector('.menu-path')?.textContent, info: document.querySelector('.menu-info')?.textContent,
+      await evaluate(`(() => { const row = [...document.querySelectorAll('.row.entry')].find(r => r.textContent.includes('LICENSE')), r = row.getBoundingClientRect();
+        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.left + 80, clientY: r.top + 20 })); })()`);
+      await until(`!document.getElementById('menu').hidden`, '长按后行菜单出现');
+      const held = await evaluate(`(() => { const m = document.getElementById('menu').getBoundingClientRect(); return { shown: !document.getElementById('menu').hidden, path: document.querySelector('.menu-path')?.textContent, info: document.querySelector('.menu-info')?.textContent,
           inside: m.left >= 0 && m.right <= innerWidth && m.top >= 0 && m.bottom <= innerHeight }; })()`);
       check(`iPhone ${size} ${theme}：长按菜单有信息行，完整在页面内`, held.shown && held.path === 'LICENSE' && /^2 B · 2025-03-04 10:00:00$/.test(held.info) && held.inside, JSON.stringify(held));
       await shoot(`ios-${size}-${theme}-longpress`);
       await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
       // 长名字：路径折行，大小 · 完整修改时间不折行，菜单不超出页面。
-      await evaluate(`(async () => { const row = [...document.querySelectorAll('.row.entry')].find(r => r.textContent.includes('${LONG_NAME.slice(0, 12)}')), r = row.getBoundingClientRect();
-        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.left + 80, clientY: r.top + 20 })); await new Promise(x => setTimeout(x, 700)); })()`);
+      await evaluate(`(() => { const row = [...document.querySelectorAll('.row.entry')].find(r => r.textContent.includes('${LONG_NAME.slice(0, 12)}')), r = row.getBoundingClientRect();
+        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.left + 80, clientY: r.top + 20 })); })()`);
+      await until(`!document.getElementById('menu').hidden`, '长按长名字后行菜单出现');
       const longRow = await evaluate(rowMenu);
       const [sl, sr] = size === 'landscape' ? [59, 59] : [0, 0];
       check(`iPhone ${size} ${theme}：长名字的行菜单路径折行，大小 · 完整修改时间不折行，完整在安全区内`, longRow.shown && longRow.path === LONG_NAME && longRow.pathLines >= 2 && longRow.infoLines === 1 && longRow.infoFits
         && longRow.left >= sl && longRow.right <= longRow.w - sr && longRow.top >= 0 && longRow.bottom <= longRow.h, JSON.stringify(longRow));
       await shoot(`ios-${size}-${theme}-longpress-long`);
       await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
-      await pick('日期', 'ios');
+      await pickSort('日期', 'ios');
       await shoot(`ios-${size}-${theme}-date`);
       await openFile(size, theme);
       await shoot(`ios-${size}-${theme}-file`);
