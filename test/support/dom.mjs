@@ -126,7 +126,7 @@ export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree'
   const app = await import(`../../view/${entry}?instance=${++instance}`);
   return {
     ...elements,
-    // 入口模块的导出（图标视图的 changeView）和尺寸变化。
+    // 入口模块的导出和尺寸变化。
     app,
     resize: () => resizers.forEach(fn => fn()),
     // 模块发给页面的消息。

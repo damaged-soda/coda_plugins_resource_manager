@@ -201,8 +201,8 @@ function changeSort(sort) {
 }
 
 // 换视图：全局一份，存进 persisted；两种视图各留着自己的内容和滚动位置，换回来还在。
-// 「显示」菜单调用它；测试和 harness 也经模块导出直接调用。
-export function changeView(view) {
+// 「显示」菜单调用它。
+function changeView(view) {
   const before = model.view;
   model.setView(view);
   if (model.view === before) return;

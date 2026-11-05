@@ -1,5 +1,5 @@
 // 图标视图接进页面（view/app.mjs）：单击进入和打开、右键、长按、上一层（Mac 头部、iPhone 原生返回和 EXIT）、滚动位置的保存和恢复。
-// 真实的 app.mjs、Model、Link、grid.mjs，配最小的假 DOM 和脚本化的假模块；视图用 changeView 切换（页面入口的导出，「显示」菜单也调用它）。
+// 真实的 app.mjs、Model、Link、grid.mjs，配最小的假 DOM 和脚本化的假模块；视图经真实的「更多」菜单切换（Mac 原生按钮 → 「显示」）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
@@ -29,6 +29,9 @@ async function start(t, { platform = 'mac', icons = true, saved, settle = true, 
   return ctx;
 }
 const click = async (page, name) => { cellNamed(page, name).dispatch('click'); await flush(); };
+// 经「显示」菜单换视图：起的时候要带 coda.toolbar（Mac 的原生「更多」按钮）。
+const showAs = async ({ page, host }, view) => { host.events.toolbar({ id: 'more' }); pick(page, view === 'icons' ? '图标' : '列表'); await flush(); };
+const TOOLBAR = { toolbar: () => {} };
 const scrollTo = (page, top) => { body(page).scrollTop = top; body(page).dispatch('scroll'); };
 
 // ---- 交互 ----
@@ -426,20 +429,18 @@ test('根目录换了：cwd 和滚动位置回到根目录和顶部', async t =>
 
 test('切换视图：两种视图各自的滚动位置互不影响，列表的展开状态不丢；视图存进状态', async t => {
   const saved = [];
-  const { page, host } = await start(t, { icons: false, coda: { setState: value => saved.push(JSON.parse(JSON.stringify(value))) } });
+  const ctx = await start(t, { icons: false, coda: { ...TOOLBAR, setState: value => saved.push(JSON.parse(JSON.stringify(value))) } });
+  const { page, host } = ctx;
   const pane = page.tree;
   pane.scrollTop = 24 * 9;
   pane.dispatch('scroll');
-  page.app.changeView('icons');
-  await flush();
+  await showAs(ctx, 'icons');
   assert.equal(visible(page.grid), true);
   scrollTo(page, ROW * 4);
-  page.app.changeView('list');
-  await flush();
+  await showAs(ctx, 'list');
   assert.equal(visible(page.tree), true);
   assert.equal(pane.scrollTop, 24 * 9, '列表的位置还在');
-  page.app.changeView('icons');
-  await flush();
+  await showAs(ctx, 'icons');
   assert.equal(body(page).scrollTop, ROW * 4, '网格的位置还在');
   host.events.visibility(false);
   assert.equal(saved.at(-1).view, 'icons');
@@ -448,27 +449,26 @@ test('切换视图：两种视图各自的滚动位置互不影响，列表的�
 });
 
 test('切换视图：列表的展开状态在图标里不丢，换回去目录还展开着', async t => {
-  const { page } = await start(t, { icons: false });
+  const ctx = await start(t, { icons: false, coda: TOOLBAR });
+  const { page } = ctx;
   const dirRow = () => page.tree.find(node => node.classList.contains('row') && node.textContent.includes('dir'))[0];
   dirRow().dispatch('click');
   await flush();
   assert.equal(dirRow().getAttribute('aria-expanded'), 'true');
-  page.app.changeView('icons');
-  await flush();
+  await showAs(ctx, 'icons');
   assert.ok(cellNamed(page, 'dir'));
-  page.app.changeView('list');
-  await flush();
+  await showAs(ctx, 'list');
   assert.equal(dirRow().getAttribute('aria-expanded'), 'true');
   assert.ok(page.tree.find(node => node.classList.contains('row') && node.textContent.includes('x.txt')).length > 0);
 });
 
 test('旧状态（0.5.0：没有视图、cwd、网格位置）：启动是列表，位置照旧', async t => {
   const old = { v: 1, seq: 1, hidden: false, sessions: { s1: { at: 1, expanded: [], selected: null, scroll: { tree: 55, top: 0, left: 0 } } } };
-  const { page } = await start(t, { state: old });
+  const ctx = await start(t, { state: old, coda: TOOLBAR });
+  const { page } = ctx;
   assert.equal(visible(page.tree), true);
   assert.equal(page.tree.scrollTop, 55);
-  page.app.changeView('icons');
-  await flush();
+  await showAs(ctx, 'icons');
   assert.ok(cellNamed(page, 'dir'), '切到图标：从根目录开始');
 });
 
