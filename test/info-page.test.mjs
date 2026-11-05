@@ -455,3 +455,62 @@ test('属性页开着时 Mac 的目录树 inert，隐藏面板（预览、说明
   assert.equal(ctx.page.notice.inert, true);
   assert.equal(ctx.page.info.inert, false);
 });
+
+// ---- 工具条：属性页上没有 ⋯ ----
+
+const MAC_MORE = { id: 'more', label: '更多', icon: 'ellipsis', kind: 'button' };
+const barLabels = page => buttons(page.bar).map(node => node.getAttribute('aria-label') ?? node.textContent);
+const barParts = page => page.bar.children.map(node => (node.classList.contains('bar-title') ? 'title' : node.classList.contains('exit') ? 'exit' : node.getAttribute('aria-label')));
+
+test('Mac（原生工具栏）：进入属性页工具栏撤空，退出恢复「更多」；撤空期间迟到的 more 事件不弹菜单', async t => {
+  const given = [];
+  const ctx = await start(t, { coda: { toolbar: items => given.push(items) } });
+  const { page, host } = ctx;
+  assert.deepEqual(given.at(-1), [MAC_MORE]);
+  await openInfo(ctx, 'a.txt');
+  assert.deepEqual(given.at(-1), [], '属性页上没有「更多」');
+  host.events.toolbar({ id: 'more' });
+  await flush();
+  assert.equal(page.menu.hidden, true, '原生按钮已撤掉，迟到的事件不弹菜单');
+  host.events.back({ steps: 1 });
+  await flush();
+  assert.deepEqual(given.at(-1), [MAC_MORE], '退出属性页恢复');
+  host.events.toolbar({ id: 'more' });
+  await flush();
+  assert.equal(page.menu.hidden, false, '恢复后「更多」照常弹菜单');
+});
+
+test('iPhone：属性页上页内工具条只留返回（横屏才显示）和标题，没有 ⋯；退出恢复', async t => {
+  const ctx = await start(t, { platform: 'ios' });
+  const { page, host } = ctx;
+  assert.deepEqual(barParts(page), ['exit', 'title', '更多']);
+  await openInfo(ctx, 'a.txt');
+  assert.deepEqual(barParts(page), ['exit', 'title'], '只留返回和标题');
+  assert.equal(page.bar.hidden, false);
+  host.events.back({ steps: 1 });
+  await flush();
+  assert.deepEqual(barParts(page), ['exit', 'title', '更多'], '退出恢复');
+});
+
+test('iPhone 横屏的返回关属性页后，工具条也恢复', async t => {
+  const ctx = await start(t, { platform: 'ios' });
+  const { page } = ctx;
+  await openInfo(ctx, 'a.txt');
+  buttons(page.bar).find(node => node.classList.contains('exit')).dispatch('click');
+  await flush();
+  assert.deepEqual(barParts(page), ['exit', 'title', '更多']);
+});
+
+test('没有原生工具栏的 Mac（harness）：属性页上整条页内工具条不显示，退出恢复刷新和显示隐藏文件', async t => {
+  const ctx = await start(t, { back: false });
+  const { page } = ctx;
+  assert.deepEqual(barLabels(page), ['刷新', '显示隐藏文件']);
+  assert.equal(page.bar.hidden, false);
+  await openInfo(ctx, 'a.txt');
+  assert.equal(page.bar.hidden, true, '没有项就整条藏起来，不留一条空线');
+  assert.deepEqual(barLabels(page), []);
+  buttons(page.info).find(node => node.getAttribute('aria-label') === '返回').dispatch('click');
+  await flush();
+  assert.equal(page.bar.hidden, false);
+  assert.deepEqual(barLabels(page), ['刷新', '显示隐藏文件']);
+});

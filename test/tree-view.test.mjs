@@ -19,29 +19,30 @@ const start = async (t, options) => {
   return ctx;
 };
 
-test('iconFor：目录、链接、其他按种类；文件按扩展名，不分大小写；没有匹配的是文档', () => {
+test('iconFor：目录、链接、其他按种类；文件按文件名再按扩展名，不分大小写；没有匹配的是文档', () => {
   const file = name => iconFor({ kind: 'file', name });
   assert.equal(iconFor({ kind: 'dir', name: 'a.png' }), 'folder');
   assert.equal(iconFor({ kind: 'link', name: 'a.js' }), 'link');
   assert.equal(iconFor({ kind: 'other', name: 'a.js' }), 'other');
-  assert.equal(file('main.mjs'), 'code');
+  assert.equal(file('main.mjs'), 'js');
   assert.equal(file('LOGO.PNG'), 'image');
-  assert.equal(file('notes.txt'), 'doc');
+  assert.equal(file('notes.txt'), 'text');
   assert.equal(file('Makefile'), 'doc');
-  assert.equal(file('.gitignore'), 'doc', '整个文件名在表里（Git 配置），glyph 先指文档');
-  assert.equal(file('archive.tar.gz'), 'doc');
+  assert.equal(file('.gitignore'), 'git', '整个文件名在表里（Git 配置）');
+  assert.equal(file('archive.tar.gz'), 'archive');
   assert.equal(file('trailing.'), 'doc');
 });
 
-test('icon：用 createElementNS 造 SVG，颜色是 currentColor，目录是填充的', t => {
+test('icon：用 createElementNS 造 SVG，颜色是 currentColor，目录是填充的；种类图标带色调类，别的不带', t => {
   const made = [];
   globalThis.document = { createElementNS: (ns, tag) => { const node = { ns, tag, attrs: {}, kids: [], setAttribute(k, v) { this.attrs[k] = v; }, append(...n) { this.kids.push(...n); } }; made.push(node); return node; } };
   t.after(() => { delete globalThis.document; });
-  const folder = icon('folder', 20), doc = icon('doc');
+  const folder = icon('folder', 20), doc = icon('doc'), chevron = icon('chevron');
   assert.equal(folder.ns, 'http://www.w3.org/2000/svg');
   assert.deepEqual([folder.attrs.width, folder.attrs.fill, folder.attrs.stroke], [20, 'currentColor', undefined]);
   assert.deepEqual([doc.attrs.width, doc.attrs.fill, doc.attrs.stroke], [16, 'none', 'currentColor']);
-  assert.equal(doc.kids.length, 3);
+  assert.equal(doc.kids.length, 2);
+  assert.deepEqual([folder.attrs.class, doc.attrs.class, chevron.attrs.class], ['tone-accent', 'tone-gray', undefined]);
 });
 
 test('目录行：文件夹图标和箭头，展开时带 open 类，aria-expanded 跟着变；读取中箭头槽显示 …', async t => {

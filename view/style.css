@@ -1,4 +1,5 @@
-/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（插件视图的主题变量）。 */
+/* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（插件视图的主题变量）。
+   唯一的例外是下面的 --tone-*：种类图标的色调，主题变量里没有这一组。 */
 :root {
   --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
   --line: var(--coda-separator, rgba(0,0,0,.1));
@@ -10,6 +11,20 @@
   font: var(--coda-font-size, 13px)/1.45 var(--coda-font, -apple-system, system-ui, sans-serif);
   color: var(--coda-foreground, #1d1d1f); background: transparent;
 }
+/* 种类图标的色调。图标是 currentColor，.tone-* 把颜色给到 svg 上；文件夹用强调色，链接和特殊文件没有色调，跟随三级文字色。
+   两种外观下，在 --coda-background 和 --coda-card 上的对比度都不低于 3:1（harness 读真实计算值检查）；改色值要重新跑。 */
+:root {
+  --tone-gray: #6b6b72; --tone-blue: #2a68b8; --tone-yellow: #946a00; --tone-green: #26803f; --tone-teal: #12788f;
+  --tone-orange: #b85a14; --tone-red: #c0303a; --tone-purple: #7447bd; --tone-pink: #b8326f;
+}
+:root.coda-dark {
+  --tone-gray: #a3a3a9; --tone-blue: #6aa9ec; --tone-yellow: #e3b63e; --tone-green: #63c77f; --tone-teal: #58c3dd;
+  --tone-orange: #f0964f; --tone-red: #f0717a; --tone-purple: #ac87ec; --tone-pink: #ee77ac;
+}
+.tone-accent { color: var(--coda-accent, #0a84ff); }
+.tone-gray { color: var(--tone-gray); } .tone-blue { color: var(--tone-blue); } .tone-yellow { color: var(--tone-yellow); }
+.tone-green { color: var(--tone-green); } .tone-teal { color: var(--tone-teal); } .tone-orange { color: var(--tone-orange); }
+.tone-red { color: var(--tone-red); } .tone-purple { color: var(--tone-purple); } .tone-pink { color: var(--tone-pink); }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; -webkit-user-select: none; user-select: none;
@@ -31,7 +46,7 @@ p { margin: 0; }
 .pane.off { visibility: hidden; pointer-events: none; }
 .empty { display: grid; align-content: start; justify-items: center; gap: 6px; padding: 32px 20px; text-align: center; }
 .notice-icon { display: grid; place-items: center; margin-bottom: 6px; color: var(--coda-secondary, #6e6e73); }
-.notice-icon svg { display: block; }
+.notice-icon svg { display: block; color: inherit; } /* 说明区的图标不上色 */
 
 /* 页内工具条：iPhone 树页在顶部（返回、根目录名、⋯），文件页在底部（.bottom：返回、刷新、复制路径）。没有 coda.toolbar 的其他平台（harness）是一条文字按钮。 */
 .bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
@@ -53,6 +68,10 @@ p { margin: 0; }
 .row { position: relative; display: flex; align-items: center; gap: 4px; height: var(--row-h); padding: 0 8px 0 calc(var(--indent) * var(--d, 0) + var(--pad));
   border-radius: var(--coda-radius, 6px); white-space: nowrap; cursor: default; }
 .row.sel { background: var(--coda-selection, var(--hover)); }
+/* Mac 的缩进线：每一层一条，在祖先箭头（14 点宽）的中心，按行的 --d 画重复渐变，不增加 DOM。
+   用 ::after（::before 是 iPhone 的分隔线），画在行背景的上面，悬停、选中的 background 盖不掉。 */
+.coda-mac .row::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(var(--pad) + 6.5px); width: calc(var(--indent) * var(--d, 0)); pointer-events: none;
+  background: repeating-linear-gradient(to right, var(--coda-separator, var(--line)) 0 1px, transparent 1px var(--indent)); }
 .row.more, .row.retry { color: var(--coda-accent, #0a84ff); cursor: pointer; }
 .row.status { display: block; overflow: hidden; text-overflow: ellipsis; line-height: var(--row-h); color: var(--coda-secondary, #6e6e73); }
 .row.dead .name, .row.dead .ico { color: var(--coda-tertiary, #a1a1a6); }

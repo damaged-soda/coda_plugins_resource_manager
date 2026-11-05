@@ -6,6 +6,7 @@ import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { KINDS } from '../../view/icons.mjs';
 
 const chromePath = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const DEBUG_PORT = 9334, STARTUP_MS = 60000;
@@ -14,6 +15,8 @@ const LONG_LINES = 300; // notes.txt 的行数：文件页要滚得动，才能�
 const LONG_NAME = 'a-very-long-file-name-that-cannot-fit-in-a-narrow-sidebar.md'; // 名字截断时 meta 不缩
 const LONG_DIR = 'long-directory-name-that-goes-on-and-on-and-on-forever', LONG_SUB = 'another-quite-long-nested-directory-name-for-the-menu';
 const DEEP_FILE = 'a-file-with-a-name-that-is-long-too-so-the-path-wraps-many-lines.txt'; // docs 下的三层：行菜单的路径折很多行
+const TYPED = ['app.ts', 'main.py', 'main.go', 'lib.rs', 'App.swift', 'main.c', 'Main.java', 'tool.rb', 'index.html', 'theme.css', 'data.json', 'config.yml', 'build.sh', 'notes.md', 'report.pdf',
+  'photo.jpg', 'clip.mp4', 'song.mp3', 'archive.zip', 'sheet.csv', 'cache.sqlite', 'face.woff2', 'yarn.lock', 'Cargo.toml', 'query.sql', 'plain.txt', 'blob.bin']; // assets 里各种类型的文件：截图里看类型图标
 const HIDDEN_NAME = '.DS_Store'; // 页面默认藏起来的名字之一：「显示隐藏文件」打开后它才出现，这就是选完之后该等到的样子
 const ROOT_ROWS = 4 + 3 + 1 + 2 + FILLER; // 四个目录、三个文件、一个长名字、两个链接、填充；HIDDEN_NAME 默认被页面藏起来，不算
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -76,6 +79,7 @@ async function start() {
   const touch = (path, text = 'x\n') => writeFile(join(fixture, path), text);
   await Promise.all([
     touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'), touch(join('docs', LONG_DIR, LONG_SUB, DEEP_FILE)),
+    ...TYPED.map(name => touch(join('assets', name))),
     touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
     touch(LONG_NAME), touch(HIDDEN_NAME), ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
   ]);
@@ -107,10 +111,10 @@ async function start() {
 
 // 页面发出的请求（带 requestId 的消息）和它们的回答：记下已发出的个数和还没回答的编号，「请求都有了回答」就是目录请求和重绘都完成的信号。
 // 回答的监听在捕获阶段先于页面自己的处理，但页面处理在同一个任务里完成，下一条 evaluate 到达时重绘已经发生。
-const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__rpc = { sent: 0, open: new Set(), adds: [], copies: [] }, post = coda.postMessage;
+const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__rpc = { sent: 0, open: new Set(), adds: [], copies: [], toolbars: [] }, post = coda.postMessage;
   coda.postMessage = message => { if (message?.requestId) { rpc.sent++; rpc.open.add(message.requestId); } if (message?.type === 'add_text') rpc.adds.push({ text: message.text, block: message.block }); return post(message); };
   coda.copy = text => { rpc.copies.push(text); };
-  addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); }, true); })()`;
+  addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); if (event.data?.harness === 'toolbar' && event.data.items) rpc.toolbars.push(event.data.items); }, true); })()`;
 const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
@@ -581,6 +585,109 @@ try {
   await evaluate(`document.querySelector('#bar .exit').click()`);
   await until(`getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '横屏返回关属性页');
   check('iPhone 横屏：「返回」在属性页里关属性页，没有离开视图，并重新声明根层', await evaluate(`location.pathname === '/view/index.html' && JSON.stringify(window.__backs) === '[["资源管理器"],[]]'`));
+
+  // ---- 0.5.0 第 3 步：属性页上的工具条、类型图标的颜色、Mac 的缩进线 ----
+  // 属性页上没有 ⋯：Mac 的原生工具栏声明空数组，iPhone 的页内工具条只剩返回和标题；退出恢复。
+  await open('mac', 'mac', 'light');
+  await openInfo('mac', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
+  await until(`window.__rpc.toolbars.at(-1)?.length === 0`, '属性页上原生工具栏撤空');
+  check('Mac：属性页上原生工具栏没有「更多」（声明了空数组）', await evaluate(`window.__rpc.toolbars.at(-1).length === 0`));
+  await evaluate(`postMessage({ harness: 'back' }, '*')`);
+  await until(`JSON.stringify(window.__rpc.toolbars.at(-1)?.map(x => x.id)) === '["more"]'`, '退出属性页后恢复「更多」');
+  check('Mac：退出属性页后「更多」恢复', true);
+  const phoneBar = `[...document.querySelectorAll('#bar > *')].map(x => x.classList.contains('exit') ? 'exit' : x.classList.contains('bar-title') ? 'title' : x.getAttribute('aria-label'))`;
+  for (const size of ['portrait', 'landscape']) {
+    await open(size, 'ios', 'light');
+    check(`iPhone ${size}：目录树上工具条是 返回、根目录名、更多`, JSON.stringify(await evaluate(phoneBar)) === '["exit","title","更多"]', JSON.stringify(await evaluate(phoneBar)));
+    await openInfo('ios', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
+    await until(`JSON.stringify(${phoneBar}) === '["exit","title"]'`, '属性页上工具条没有 ⋯');
+    check(`iPhone ${size}：属性页上页内工具条只剩返回和标题（返回${size === 'landscape' ? '显示' : '隐藏'}）`, await evaluate(`getComputedStyle(document.querySelector('#bar .exit')).display !== 'none'`) === (size === 'landscape'));
+    await evaluate(`postMessage({ harness: 'back' }, '*')`);
+    await until(`JSON.stringify(${phoneBar}) === '["exit","title","更多"]'`, '退出属性页后 ⋯ 恢复');
+    check(`iPhone ${size}：退出属性页后 ⋯ 恢复`, true);
+  }
+
+  // 颜色：每个 --tone-* 在 --coda-background 和 --coda-card 上的对比度不低于 3:1（读真实计算值）；.tone-* 类真的把这个颜色给到图标上；不能打开的条目仍是三级文字色。
+  const TONES = [...new Set(Object.values(KINDS).map(kind => kind.tone))].filter(tone => tone !== 'accent' && tone !== 'muted');
+  const colors = `(() => {
+    const lum = css => { const [r, g, b] = css.match(/[\\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    const probe = document.createElement('span'); document.body.append(probe);
+    const color = value => { probe.style.cssText = 'color: ' + value; return getComputedStyle(probe).color; };
+    const fill = value => { probe.style.cssText = 'background-color: ' + value; return getComputedStyle(probe).backgroundColor; };
+    const bg = fill('var(--coda-background)'), card = fill('var(--coda-card)');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); document.querySelector('.ico').append(svg);
+    const out = ${JSON.stringify(TONES)}.map(tone => { svg.setAttribute('class', 'tone-' + tone); const own = color('var(--tone-' + tone + ')'), drawn = getComputedStyle(svg).color;
+      return { tone, own, drawn, wired: own === drawn, onBackground: Number(ratio(own, bg).toFixed(2)), onCard: Number(ratio(own, card).toFixed(2)) }; });
+    svg.setAttribute('class', 'tone-accent'); const accent = getComputedStyle(svg).color === color('var(--coda-accent)');
+    const dead = document.querySelector('.row.dead .ico svg'), deadOk = dead && getComputedStyle(dead).color === color('var(--coda-tertiary)');
+    svg.remove(); probe.remove();
+    return { bg, card, out, accent, deadOk: Boolean(deadOk) }; })()`;
+  for (const theme of ['light', 'dark']) {
+    await open('mac', 'mac', theme);
+    const c = await evaluate(colors);
+    check(`${theme}：${TONES.length} 个 --tone-* 都在 ${c.bg}（背景）和 ${c.card}（卡片）上不低于 3:1`, c.out.length === TONES.length && c.out.every(x => x.onBackground >= 3 && x.onCard >= 3), JSON.stringify(c.out.filter(x => x.onBackground < 3 || x.onCard < 3)));
+    check(`${theme}：.tone-* 类把 --tone-* 的颜色给到图标上（也没有两个色调同色）`, c.out.every(x => x.wired) && new Set(c.out.map(x => x.own)).size === TONES.length, JSON.stringify(c.out.filter(x => !x.wired)));
+    check(`${theme}：文件夹用强调色，不能打开的条目（链接）的图标仍是三级文字色，没有色调`, c.accent && c.deadOk, JSON.stringify({ accent: c.accent, dead: c.deadOk }));
+    // 目录树里真实的图标：语言类的徽标有字母，字母的字体跟页面。
+    await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('assets')).click()`);
+    await until(`[...document.querySelectorAll('.row .name')].some(x => x.textContent === 'app.ts')`, 'assets 展开');
+    const badge = await evaluate(`(() => { const row = [...document.querySelectorAll('.row')].find(r => r.querySelector('.name')?.textContent === 'app.ts'), svg = row.querySelector('.ico svg'), text = svg.querySelector('text');
+      return { letters: text?.textContent, cls: svg.getAttribute('class'), family: getComputedStyle(text).fontFamily === getComputedStyle(document.body).fontFamily, w: svg.getBoundingClientRect().width }; })()`);
+    check(`${theme}：app.ts 是 TS 徽标，色调 blue，字母的字体跟页面，16 点`, badge.letters === 'TS' && badge.cls === 'tone-blue' && badge.family && badge.w === 16, JSON.stringify(badge));
+    await shoot(`mac-types-${theme}`);
+  }
+  for (const [size, theme] of [['portrait', 'light'], ['portrait', 'dark'], ['landscape', 'dark']]) {
+    await open(size, 'ios', theme);
+    await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('assets')).click()`);
+    await until(`[...document.querySelectorAll('.row .name')].some(x => x.textContent === 'app.ts')`, 'assets 展开');
+    const c = await evaluate(colors);
+    check(`iPhone ${size} ${theme}：22 点的类型图标，.tone-* 同样生效`, c.out.every(x => x.wired) && c.accent && await evaluate(`document.querySelector('.row.file .ico svg').getBoundingClientRect().width === 22`), JSON.stringify(c.out.filter(x => !x.wired)));
+    await shoot(`ios-${size}-${theme}-types`);
+  }
+
+  // Mac 的缩进线：每一层一条，在祖先箭头的中心；选中、悬停时还在；iPhone 没有。
+  await open('mac', 'mac', 'light');
+  const expandRow = async (name, child) => {
+    await evaluate(`[...document.querySelectorAll('.row.dir')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)}).click()`);
+    await until(`[...document.querySelectorAll('.row .name')].some(x => x.textContent === ${JSON.stringify(child)})`, `${name} 展开`);
+  };
+  await expandRow('docs', 'README.md');
+  await expandRow(LONG_DIR, LONG_SUB);
+  await expandRow(LONG_SUB, DEEP_FILE);
+  const guides = `(() => {
+    const rows = [...document.querySelectorAll('.row')], byName = name => rows.find(r => r.querySelector('.name')?.textContent === name);
+    const row = byName(${JSON.stringify(DEEP_FILE)}), after = getComputedStyle(row, '::after'), box = row.getBoundingClientRect(), indent = parseFloat(getComputedStyle(row).getPropertyValue('--indent'));
+    const chevs = ['docs', ${JSON.stringify(LONG_DIR)}, ${JSON.stringify(LONG_SUB)}].map(name => { const r = byName(name).querySelector('.chev').getBoundingClientRect(); return r.left + r.width / 2; });
+    const lines = chevs.map((_, k) => box.left + parseFloat(after.left) + k * indent + 0.5);
+    const shallow = getComputedStyle(byName('docs'), '::after');
+    return { depth: row.style.cssText, image: after.backgroundImage.startsWith('repeating-linear-gradient'), position: after.position, events: after.pointerEvents, width: parseFloat(after.width), indent,
+      offsets: lines.map((x, k) => Number((x - chevs[k]).toFixed(2))), top: after.top === '0px' && after.bottom === '0px', rootWidth: parseFloat(shallow.width), before: getComputedStyle(row, '::before').content }; })()`;
+  const g = await evaluate(guides);
+  check('Mac：深三层的行有缩进线（重复渐变），宽 3 个缩进，贯穿整行，不挡点击', g.image && g.position === 'absolute' && g.events === 'none' && g.top && g.width === 3 * g.indent, JSON.stringify(g));
+  check('Mac：每一条线都在对应祖先箭头的中心（误差不超过 0.5 点）', g.offsets.length === 3 && g.offsets.every(x => Math.abs(x) <= 0.5), JSON.stringify(g.offsets));
+  check('Mac：第一层的行没有缩进线（宽 0），没有占用 ::before（iPhone 的分隔线用它）', g.rootWidth === 0 && g.before === 'none', JSON.stringify(g));
+  // 悬停：真实的鼠标移动。选中：点这一行（Mac 点文件会打开预览，目录树只是被盖住，行的样式照常算出）。
+  const spot = await evaluate(`(() => { const r = [...document.querySelectorAll('.row')].find(x => x.querySelector('.name')?.textContent === ${JSON.stringify(DEEP_FILE)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: spot.x, y: spot.y });
+  await until(`[...document.querySelectorAll('.row')].some(x => x.querySelector('.name')?.textContent === ${JSON.stringify(DEEP_FILE)} && x.matches(':hover'))`, '鼠标悬停在这一行');
+  const ruleState = `(() => { const row = [...document.querySelectorAll('.row')].find(x => x.querySelector('.name')?.textContent === ${JSON.stringify(DEEP_FILE)}), a = getComputedStyle(row, '::after'); return { image: a.backgroundImage.startsWith('repeating-linear-gradient'), width: a.width, bg: getComputedStyle(row).backgroundColor }; })()`;
+  const hovered = await evaluate(ruleState);
+  check('Mac：悬停的行缩进线还在，行底色变了（线画在底色上面）', hovered.image && hovered.width === g.width + 'px' && hovered.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(hovered));
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+  await evaluate(`[...document.querySelectorAll('.row.file')].find(x => x.querySelector('.name')?.textContent === ${JSON.stringify(DEEP_FILE)}).click()`);
+  await until(`document.querySelector('.row.sel')`, '行被选中');
+  const selected = await evaluate(`(() => { const row = document.querySelector('.row.sel'), a = getComputedStyle(row, '::after'); return { name: row.querySelector('.name').textContent, image: a.backgroundImage.startsWith('repeating-linear-gradient'), width: a.width, bg: getComputedStyle(row).backgroundColor }; })()`);
+  check('Mac：选中的行缩进线还在，行有选中底色', selected.name === DEEP_FILE && selected.image && selected.width === g.width + 'px' && selected.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(selected));
+  await open('mac', 'mac', 'dark');
+  await expandRow('docs', 'README.md');
+  await expandRow(LONG_DIR, LONG_SUB);
+  await shoot('mac-guides-dark');
+  await open('portrait', 'ios', 'light');
+  await expandRow('docs', 'README.md');
+  const phone = await evaluate(`(() => { const row = [...document.querySelectorAll('.row')].find(r => r.querySelector('.name')?.textContent === 'README.md'), a = getComputedStyle(row, '::after'), b = getComputedStyle(row, '::before');
+    return { depth: row.style.cssText, after: a.content, image: a.backgroundImage, before: b.content, sepHeight: b.height }; })()`);
+  check('iPhone：没有缩进线（::after 不存在），分隔线（::before）照旧', phone.after === 'none' && phone.image === 'none' && phone.before !== 'none' && phone.sepHeight === '1px', JSON.stringify(phone));
 
   // 选中文字的右键（Mac）：用真实的选区和 Range。三击选行（Chrome 的选区结尾落在下一行行首），拖选多行，从行号列拖进正文，裁剪后为空。
   await open('mac', 'mac', 'light');

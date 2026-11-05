@@ -129,15 +129,16 @@ function render() {
 
 // ---- 工具栏：Mac 用 coda.toolbar，没有的（iOS、harness）退成页内一条 ----
 // Mac 只有一个原生按钮「更多」：原生菜单带向下的箭头，关不掉，所以按下后由页面弹菜单。返回键在预览头部，不在这里。
-const toolbarItems = () => hasToolbar
+// 属性页上排序、刷新、显示隐藏文件都没有意义：工具栏不放任何项，退出属性页后恢复。
+const toolbarItems = () => infoOpen ? [] : hasToolbar
   ? [{ id: 'more', label: '更多', icon: 'ellipsis', kind: 'button' }]
   : [
     { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
     { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
   ];
-// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里；属性页上没有 ⋯。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
-const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
+const phoneItems = () => [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, ...(infoOpen ? [] : [MORE])];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar() {
@@ -147,6 +148,7 @@ function syncToolbar() {
   if (hasToolbar) return quiet(() => coda.toolbar(items));
   menu.hide(); // 重画会换掉 ⋯ 按钮，开着的菜单认不得新按钮
   paintBar($('bar'), items, act);
+  $('bar').hidden = items.length === 0; // 没有项（属性页上的页内工具条）就整条不显示
 }
 
 // 原生按钮没有 DOM 元素可以当锚点：用一个固定在页面右上角的假锚点，同时也是「谁打开的菜单」的标记。
@@ -186,7 +188,7 @@ function act(id, button) {
   }
 }
 // 原生按钮的事件是 { id }：只认 more，别的什么都不做。
-quiet(() => coda.on('toolbar', event => { if (event?.id === 'more') act('more', TOOLBAR); }));
+quiet(() => coda.on('toolbar', event => { if (event?.id === 'more' && !infoOpen) act('more', TOOLBAR); })); // 属性页上原生按钮已撤掉，迟到的事件不弹菜单
 
 // ---- 状态保留 ----
 let saveTimer = null;
