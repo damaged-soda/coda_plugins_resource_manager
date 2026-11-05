@@ -532,13 +532,15 @@ try {
   const shortMenu = await evaluate(menuInfo);
   check('iPhone 视口只有 220 点高：⋯ 菜单有高度上限，内容放不下就在菜单里滚动，不超出安全区', shortMenu.scrolls && shortMenu.top >= 0 && shortMenu.bottom <= shortMenu.h - 21 + 0.5, JSON.stringify(shortMenu));
 
-  // 属性页：两端两种外观。文件、文件夹（真实统计）、内链接、外链接；原生返回；没有 coda.back 时页内返回；横屏的返回先关属性页。
+  // 属性页：两端两种外观。文件、文件夹（真实统计）、内链接、外链接；iPhone 原生返回，Mac 头部页内返回（有 coda.back 也不声明）；横屏的返回先关属性页。
   const infoRows = `(() => Object.fromEntries([...document.querySelectorAll('#info .irow')].map(r => [r.children[0].textContent, r.children[1].textContent])))()`;
   const openInfo = async (platform, text, wait) => {
     await showRowMenu(platform, text);
     await evaluate(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === '属性').click()`);
     await until(wait, `${text} 的属性出现`);
   };
+  // 离开属性页：iPhone 走原生返回（客户端的 back 事件），Mac 点头部最左边的返回。
+  const leaveInfo = platform => evaluate(platform === 'ios' ? `postMessage({ harness: 'back' }, '*')` : `document.querySelector('#info .phead button[aria-label="返回"]').click()`);
   const infoState = `(() => { const p = document.getElementById('info'), t = document.getElementById('tree'), b = p.querySelector('.pbody'), r = p.getBoundingClientRect();
     return { infoShown: getComputedStyle(p).visibility === 'visible', treeHidden: getComputedStyle(t).visibility === 'hidden' && [...t.querySelectorAll('.chev svg')].every(x => getComputedStyle(x).visibility === 'hidden'), treeInert: t.inert, infoInert: p.inert, noOverflow: b.scrollWidth <= b.clientWidth,
       fits: r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, name: p.querySelector('.pname')?.textContent, icon: p.querySelector('.pico svg') !== null, rows: Object.keys(${infoRows}) }; })()`;
@@ -548,28 +550,29 @@ try {
     const file = await evaluate(infoState), rows = await evaluate(infoRows);
     check(`${platform} ${size} ${theme}：文件的属性页盖住目录树（隐藏的面板 inert），内容、名字、图标都在，不撑出页面`, file.infoShown && file.treeHidden && file.treeInert && !file.infoInert && file.noOverflow && file.fits && file.name === 'notes.txt' && file.icon
       && rows.种类 === '文本' && /^\d+(\.\d)? KiB（[\d,]+ 字节）$/.test(rows.大小) && rows.位置 === '工作目录' && rows.完整路径.endsWith('/demo-project/notes.txt') && /^rw/.test(rows.权限), JSON.stringify({ file, rows }));
-    check(`${platform} ${size} ${theme}：进入属性页声明了原生返回一层`, JSON.stringify(await evaluate(`window.__backs`)) === JSON.stringify([['资源管理器']]));
+    if (platform === 'ios') check(`${platform} ${size} ${theme}：进入属性页声明了原生返回一层，头部没有返回`, JSON.stringify(await evaluate(`window.__backs`)) === JSON.stringify([['资源管理器']]) && await evaluate(`document.querySelector('#info .phead button') === null`));
+    else check(`${platform} ${size} ${theme}：Mac 有 coda.back 也不声明；头部最左边是 28 点的返回图标按钮`, await evaluate(`(() => { const b = document.querySelector('#info .phead').firstElementChild, r = b.getBoundingClientRect(); return !window.__backs && b.tagName === 'BUTTON' && b.getAttribute('aria-label') === '返回' && r.width === 28 && r.height === 28; })()`));
     await shoot(`${platform}-${size}-${theme}-info-file`);
-    await evaluate(`postMessage({ harness: 'back' }, '*')`);
-    await until(`getComputedStyle(document.getElementById('info')).visibility === 'hidden' && getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '原生返回后回到目录树');
-    check(`${platform} ${size} ${theme}：原生返回回到目录树，重新声明根层；目录树不重画行（行还在）`, JSON.stringify(await evaluate(`window.__backs`)) === JSON.stringify([['资源管理器'], []]) && await evaluate(`document.querySelectorAll('.row.entry').length > 0 && document.getElementById('info').inert`));
+    await leaveInfo(platform);
+    await until(`getComputedStyle(document.getElementById('info')).visibility === 'hidden' && getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '返回后回到目录树');
+    check(`${platform} ${size} ${theme}：返回回到目录树${platform === 'ios' ? '，重新声明根层' : '，没有声明过原生返回'}；目录树不重画行（行还在）`, JSON.stringify(await evaluate(`window.__backs`)) === (platform === 'ios' ? JSON.stringify([['资源管理器'], []]) : undefined) && await evaluate(`document.querySelectorAll('.row.entry').length > 0 && document.getElementById('info').inert`));
 
     await openInfo(platform, 'src', `(${infoRows}).大小 !== undefined && (${infoRows}).大小 !== '计算中…'`);
     const dir = await evaluate(infoRows);
     check(`${platform} ${size} ${theme}：文件夹的属性：种类、真实统计出的大小和项数`, dir.种类 === '文件夹' && dir.大小 === '6 B（3 项）', JSON.stringify(dir));
     await shoot(`${platform}-${size}-${theme}-info-dir`);
-    await evaluate(`postMessage({ harness: 'back' }, '*')`);
+    await leaveInfo(platform);
     await until(`getComputedStyle(document.getElementById('info')).visibility === 'hidden'`, '返回');
     await openInfo(platform, 'latest-notes', `(${infoRows}).链接到 !== undefined`);
     const inner = await evaluate(infoRows);
     check(`${platform} ${size} ${theme}：内链接按目标显示：种类带「链接」，有「链接到」`, inner.种类 === '文本（链接）' && inner.链接到 === 'notes.txt', JSON.stringify(inner));
-    await evaluate(`postMessage({ harness: 'back' }, '*')`);
+    await leaveInfo(platform);
     await until(`getComputedStyle(document.getElementById('info')).visibility === 'hidden'`, '返回');
     await openInfo(platform, 'dangling', `(${infoRows}).种类 !== undefined`);
     const outer = await evaluate(infoRows);
     check(`${platform} ${size} ${theme}：外链接和失效的链接只有自己的元数据：没有「链接到」和大小`, outer.种类 === '链接（指向工作目录外或已失效）' && !('链接到' in outer) && !('大小' in outer), JSON.stringify(outer));
     if (theme === 'light') await shoot(`${platform}-${size}-${theme}-info-link`);
-    await evaluate(`postMessage({ harness: 'back' }, '*')`);
+    await leaveInfo(platform);
     await until(`getComputedStyle(document.getElementById('info')).visibility === 'hidden'`, '返回');
   }
   // 没有 coda.back：头部放页内返回；iPhone 横屏：工具条的「返回」先关属性页。
@@ -592,7 +595,7 @@ try {
   await openInfo('mac', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
   await until(`window.__rpc.toolbars.at(-1)?.length === 0`, '属性页上原生工具栏撤空');
   check('Mac：属性页上原生工具栏没有「更多」（声明了空数组）', await evaluate(`window.__rpc.toolbars.at(-1).length === 0`));
-  await evaluate(`postMessage({ harness: 'back' }, '*')`);
+  await leaveInfo('mac');
   await until(`JSON.stringify(window.__rpc.toolbars.at(-1)?.map(x => x.id)) === '["more"]'`, '退出属性页后恢复「更多」');
   check('Mac：退出属性页后「更多」恢复', true);
   const phoneBar = `[...document.querySelectorAll('#bar > *')].map(x => x.classList.contains('exit') ? 'exit' : x.classList.contains('bar-title') ? 'title' : x.getAttribute('aria-label'))`;
@@ -602,7 +605,7 @@ try {
     await openInfo('ios', 'notes.txt', `document.querySelectorAll('#info .irow').length >= 5`);
     await until(`JSON.stringify(${phoneBar}) === '["exit","title"]'`, '属性页上工具条没有 ⋯');
     check(`iPhone ${size}：属性页上页内工具条只剩返回和标题（返回${size === 'landscape' ? '显示' : '隐藏'}）`, await evaluate(`getComputedStyle(document.querySelector('#bar .exit')).display !== 'none'`) === (size === 'landscape'));
-    await evaluate(`postMessage({ harness: 'back' }, '*')`);
+    await leaveInfo('ios');
     await until(`JSON.stringify(${phoneBar}) === '["exit","title","更多"]'`, '退出属性页后 ⋯ 恢复');
     check(`iPhone ${size}：退出属性页后 ⋯ 恢复`, true);
   }

@@ -30,11 +30,14 @@ async function openInfo(ctx, name) {
 // 属性页里的 标签 → 值（文字）。
 const rows = page => Object.fromEntries(page.info.find(node => node.classList.contains('irow')).map(row => [row.children[0].textContent, row.children[1].textContent]));
 const button = (page, label) => buttons(page.info).find(node => node.textContent === label);
+// Mac 和没有 coda.back 的环境：点头部最左边的返回关属性页。
+const headBack = page => buttons(page.info).find(node => node.getAttribute('aria-label') === '返回');
+const closeByHead = async ctx => { headBack(ctx.page).dispatch('click'); await flush(); };
 const sized = (size, items, complete = true, unreadable = 0) => ({ size, items, complete, unreadable });
 
 // ---- 进入和离开 ----
 
-test('进入：菜单里点「属性」，属性页盖住目录树，声明原生返回一层，发 stat；回答后显示内容', async t => {
+test('进入：菜单里点「属性」，属性页盖住目录树，Mac 不声明原生返回，发 stat；回答后显示内容', async t => {
   const ctx = await start(t);
   const { page, host } = ctx;
   const request = await openInfo(ctx, 'a.txt');
@@ -43,7 +46,7 @@ test('进入：菜单里点「属性」，属性页盖住目录树，声明原�
   assert.equal(visible(page.tree), false);
   assert.equal(page.tree.inert, true, '隐藏的面板 inert');
   assert.equal(page.info.inert, false);
-  assert.deepEqual(host.calls.back, [['资源管理器']]);
+  assert.deepEqual(host.calls.back, [], 'Mac 上 coda.back 存在也不调用');
   assert.match(page.info.textContent, /a\.txt/);
   assert.match(page.info.textContent, /读取中/);
   host.answer(request, FILE);
@@ -73,13 +76,15 @@ test('子目录里的文件：位置是它所在的相对目录', async t => {
   assert.equal(rows(ctx.page).大小, '10 字节');
 });
 
-test('原生返回：on(back) 关闭属性页，回到目录树，重新声明根层；目录树的滚动位置和展开状态不丢', async t => {
-  const ctx = await start(t);
+test('iPhone 原生返回：进入声明一层，头部没有返回；on(back) 关闭属性页，重新声明根层；目录树的滚动位置和展开状态不丢', async t => {
+  const ctx = await start(t, { platform: 'ios' });
   const { page, host } = ctx;
   rowNamed(page, 'src').dispatch('click');
   await flush();
   const tree = page.tree.children;
   await openInfo(ctx, 'a.txt');
+  assert.deepEqual(host.calls.back, [['资源管理器']]);
+  assert.equal(headBack(page), undefined, '头部没有返回');
   host.events.back({ steps: 1 });
   await flush();
   assert.equal(visible(page.info), false);
@@ -92,7 +97,27 @@ test('原生返回：on(back) 关闭属性页，回到目录树，重新声明�
   assert.equal(page.info.textContent, '', '内容清掉');
 });
 
-test('没有 coda.back 的环境：页内头部放返回，点了回到目录树；有 coda.back 时头部没有返回', async t => {
+test('Mac 有 coda.back：不调用它，也不监听 back 事件；头部有返回，点了回到目录树，焦点在目录树', async t => {
+  const ctx = await start(t);
+  const { page, host } = ctx;
+  host.answer(await openInfo(ctx, 'a.txt'), FILE);
+  await flush();
+  assert.equal(host.events.back, undefined, '不监听 back');
+  const back = page.info.children[0].children[0];
+  assert.equal(back, headBack(page), '头部最左边');
+  assert.ok(back.classList.contains('icon'));
+  assert.equal(back.title, '返回');
+  back.focus();
+  back.dispatch('click');
+  await flush();
+  assert.equal(visible(page.info), false);
+  assert.ok(visible(page.tree));
+  assert.equal(page.info.textContent, '', '内容清掉');
+  assert.equal(globalThis.document.activeElement, page.tree);
+  assert.deepEqual(host.calls.back, [], '整个过程没有调用 coda.back');
+});
+
+test('没有 coda.back 的环境：页内头部放返回，点了回到目录树', async t => {
   const plain = await start(t, { back: false });
   const request = await openInfo(plain, 'a.txt');
   plain.host.answer(request, FILE);
@@ -107,12 +132,6 @@ test('没有 coda.back 的环境：页内头部放返回，点了回到目录树
   assert.equal(plain.host.calls.back.length, 0, '没有 coda.back 不报错，也不记');
 });
 
-test('有 coda.back：头部不重复放返回', async t => {
-  const ctx = await start(t);
-  await openInfo(ctx, 'a.txt');
-  assert.equal(buttons(ctx.page.info).filter(node => node.getAttribute('aria-label') === '返回').length, 0);
-});
-
 test('页内返回（没有 coda.back）之后，焦点交给目录树', async t => {
   const ctx = await start(t, { back: false });
   await openInfo(ctx, 'a.txt');
@@ -121,16 +140,6 @@ test('页内返回（没有 coda.back）之后，焦点交给目录树', async t
   back.dispatch('click');
   await flush();
   assert.equal(globalThis.document.activeElement, ctx.page.tree);
-});
-
-test('页内返回在有 coda.back 的环境也可以通过 back 事件关，关完 back([]) 只声明一次', async t => {
-  const ctx = await start(t);
-  await openInfo(ctx, 'a.txt');
-  ctx.host.events.back({ steps: 1 });
-  ctx.host.events.back({ steps: 1 }); // 多余的一次：不在属性页，只重新声明根层
-  await flush();
-  assert.deepEqual(ctx.host.calls.back, [['资源管理器'], [], []]);
-  assert.ok(visible(ctx.page.tree));
 });
 
 test('iPhone 横屏：工具条的「返回」在属性页里关属性页，不关视图；在根层才 coda.close()', async t => {
@@ -159,6 +168,26 @@ test('iPhone 横屏：「返回」关属性页后，焦点交给目录树（和�
   assert.equal(globalThis.document.activeElement, ctx.page.tree);
 });
 
+test('iPhone：多余的 back 事件（不在属性页）只重新声明根层；换会话、根目录变化关闭时也声明回根层', async t => {
+  const ctx = await start(t, { platform: 'ios' });
+  const { page, host } = ctx;
+  await openInfo(ctx, 'a.txt');
+  host.events.back({ steps: 1 });
+  host.events.back({ steps: 1 });
+  await flush();
+  assert.deepEqual(host.calls.back, [['资源管理器'], [], []]);
+  await openInfo(ctx, 'a.txt');
+  host.session('s2', '/other');
+  await flush();
+  assert.equal(visible(page.info), false);
+  assert.deepEqual(host.calls.back.at(-1), []);
+  await openInfo(ctx, 'a.txt');
+  page.post({ type: 'root', generation: host.generation, state: 'ready', path: '/moved' });
+  await flush();
+  assert.equal(visible(page.info), false);
+  assert.deepEqual(host.calls.back.at(-1), []);
+});
+
 test('iPhone 属性页：值的标签在上、值在下（样式由 CSS 管），内容同 Mac', async t => {
   const ctx = await start(t, { platform: 'ios' });
   ctx.host.answer(await openInfo(ctx, 'a.txt'), FILE);
@@ -179,7 +208,7 @@ test('换会话：关闭属性页，重新声明根层，取消的统计不报�
   host.session('s2', '/other');
   await flush();
   assert.equal(visible(page.info), false);
-  assert.deepEqual(host.calls.back.at(-1), []);
+  assert.deepEqual(host.calls.back, [], 'Mac 不声明');
   tick(30_000);
   await flush();
   assert.equal(visible(page.hint), false, '没有超时误报');
@@ -196,13 +225,13 @@ test('根目录变化（同一会话换了位置）或不再 ready：关闭属�
   page.post({ type: 'root', generation: host.generation, state: 'ready', path: '/moved' });
   await flush();
   assert.equal(visible(page.info), false, '根目录换了位置');
-  assert.deepEqual(host.calls.back.at(-1), []);
+  assert.deepEqual(host.calls.back, [], 'Mac 不声明');
 
   await openInfo(ctx, 'a.txt');
   page.post({ type: 'root', generation: host.generation, state: 'gone', path: '/moved' });
   await flush();
   assert.equal(visible(page.info), false, '工作目录不在了');
-  assert.deepEqual(host.calls.back.at(-1), []);
+  assert.deepEqual(host.calls.back, [], 'Mac 不声明');
 });
 
 test('根目录变化关闭时取消统计：发 dir_size_cancel，不会 30 秒后误报', async t => {
@@ -359,7 +388,7 @@ test('关闭属性页：统计的本地等待同时取消，发 dir_size_cancel�
   host.answer(await openInfo(ctx, 'src'), DIR);
   await flush();
   const [size] = await host.requests('dir_size');
-  host.events.back({ steps: 1 });
+  await closeByHead(ctx);
   assert.deepEqual((await host.requests('dir_size_cancel')).map(m => m.requestId), [size.requestId]);
   tick(30_000);
   await flush();
@@ -377,7 +406,7 @@ test('统计已经回答之后关闭：不再发 dir_size_cancel', async t => {
   await flush();
   host.answer((await host.requests('dir_size'))[0], sized(1, 1));
   await flush();
-  host.events.back({ steps: 1 });
+  await closeByHead(ctx);
   assert.equal((await host.requests('dir_size_cancel')).length, 0);
 });
 
@@ -388,7 +417,7 @@ test('新统计替换旧的：旧的请求被取消（本地和模块），只�
   await flush();
   const [first] = await host.requests('dir_size');
   // 关掉再打开另一个文件夹：旧的统计取消
-  host.events.back({ steps: 1 });
+  await closeByHead(ctx);
   rowNamed(page, 'lnk').dispatch('contextmenu', { clientX: 1, clientY: 1 });
   choose(page, '属性');
   host.answer((await host.requests('stat')).at(-1), { name: 'lnk', kind: 'dir', link: true, target: 'src' });
@@ -483,7 +512,7 @@ test('Mac（原生工具栏）：进入属性页工具栏撤空，退出恢复�
   host.events.toolbar({ id: 'more' });
   await flush();
   assert.equal(page.menu.hidden, true, '原生按钮已撤掉，迟到的事件不弹菜单');
-  host.events.back({ steps: 1 });
+  await closeByHead(ctx);
   await flush();
   assert.deepEqual(given.at(-1), [MAC_MORE], '退出属性页恢复');
   host.events.toolbar({ id: 'more' });

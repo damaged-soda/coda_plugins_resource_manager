@@ -8,7 +8,7 @@ import { EntryKind } from './protocol.mjs';
 // el：#info 面板。选项：
 // stat(path) → Promise<statted 回答>；size(path, signal) → Promise<sized 回答>，signal 中止后请求静默作废（连接层同时通知模块停止统计）；
 // rootPath()：根目录的绝对路径，拼完整路径用；round()：页面的数据轮次，每次 changed 加一；
-// back：给了就在头部最左边放「返回」（没有原生返回的环境）。
+// back：给了就在头部最左边放「返回」（Mac，和没有原生返回的环境）。
 export function mountInfo(el, { stat, size, rootPath, round, back = null }) {
   const head = h('div', { class: 'phead' }), body = h('div', { class: 'pbody ibody selectable' });
   el.replaceChildren(head, body);

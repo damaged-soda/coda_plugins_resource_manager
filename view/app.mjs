@@ -44,8 +44,9 @@ const preview = mountPreview($('preview'), {
   // 选中文字的右键菜单只有 Mac：iPhone 用系统的选区菜单。
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
 });
-// 属性页：页内一层。有原生返回（coda.back）时返回在客户端的导航里，没有的环境（旧客户端、harness）头部自己放一个。
-const nativeBack = typeof coda.back === 'function';
+// 属性页：页内一层。iPhone 用原生返回（coda.back）；Mac 的客户端会替声明了返回的页面画一个带小箭头的导航，
+// 和侧栏标题重复，所以 Mac 和没有 coda.back 的环境一样，头部最左边自己放返回。
+const nativeBack = isIOS && typeof coda.back === 'function';
 let infoOpen = false;
 let dataRound = 0; // 数据轮次：每收到一次 changed 加一，属性页用它判断文件夹的统计结果是不是上一轮的
 const info = mountInfo($('info'), {
@@ -229,7 +230,7 @@ function pathMenu(event, row) {
 }
 $('tree').addEventListener('scroll', menu.hide, { passive: true });
 
-// ---- 属性页：进入声明原生返回一层，所有关闭的路径（原生返回、页内返回、横屏的返回、换会话、根目录变化）都重新声明回根层 ----
+// ---- 属性页：iPhone 进入时声明原生返回一层，所有关闭的路径（原生返回、横屏的返回、换会话、根目录变化）都重新声明回根层 ----
 function openInfo(row) {
   infoOpen = true;
   info.open(row.path, row);
@@ -244,9 +245,9 @@ function closeInfo() {
   schedule();
 }
 // steps 是退几级，属性页只有一级，不论几都回到目录树；已经不在属性页时也重新声明一次根层。
-quiet(() => coda.on('back', () => {
+if (nativeBack) quiet(() => coda.on('back', () => {
   if (infoOpen) closeInfo();
-  else if (nativeBack) quiet(() => coda.back([]));
+  else quiet(() => coda.back([]));
 }));
 
 // ---- 模块的消息（代次和握手由 connection 处理）----

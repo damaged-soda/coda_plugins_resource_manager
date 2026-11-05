@@ -78,9 +78,10 @@ test('属性：文件和文件夹经真实模块；文件夹的大小是子项�
   await waitFor(() => rows().种类 === '文本', '文件属性');
   assert.equal(rows().大小, '5 字节');
   assert.match(rows().完整路径, /\/repo\/a\.txt$/);
-  assert.deepEqual(backs, [['资源管理器']]);
+  assert.deepEqual(backs, [], 'Mac 有 coda.back 也不调用');
 
-  assert.equal(page.info.find(node => node.tagName === 'BUTTON').length, 0, '有原生返回：头部没有返回按钮，文件也没有重新统计');
+  assert.equal(page.info.find(node => node.tagName === 'BUTTON').filter(node => node.getAttribute('aria-label') === '返回').length, 1, 'Mac：头部有返回按钮');
+  assert.equal(page.info.find(node => node.tagName === 'BUTTON').length, 1, '文件没有重新统计');
 });
 
 test('属性：文件夹经真实的 dir_size 统计', async t => {
@@ -90,7 +91,7 @@ test('属性：文件夹经真实的 dir_size 统计', async t => {
   choose(page, '属性');
   await waitFor(() => rows().大小 === '150 B（2 项）', '文件夹大小');
   assert.equal(rows().种类, '文件夹');
-  events.back({ steps: 1 });
+  page.info.find(node => node.tagName === 'BUTTON').find(node => node.getAttribute('aria-label') === '返回').dispatch('click');
   await flush();
   assert.equal(visible(page.info), false);
 });
