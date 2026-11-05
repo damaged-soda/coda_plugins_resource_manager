@@ -536,7 +536,7 @@ try {
     await until(wait, `${text} 的属性出现`);
   };
   const infoState = `(() => { const p = document.getElementById('info'), t = document.getElementById('tree'), b = p.querySelector('.pbody'), r = p.getBoundingClientRect();
-    return { infoShown: getComputedStyle(p).visibility === 'visible', treeHidden: getComputedStyle(t).visibility === 'hidden', treeInert: t.inert, infoInert: p.inert, noOverflow: b.scrollWidth <= b.clientWidth,
+    return { infoShown: getComputedStyle(p).visibility === 'visible', treeHidden: getComputedStyle(t).visibility === 'hidden' && [...t.querySelectorAll('.chev svg')].every(x => getComputedStyle(x).visibility === 'hidden'), treeInert: t.inert, infoInert: p.inert, noOverflow: b.scrollWidth <= b.clientWidth,
       fits: r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, name: p.querySelector('.pname')?.textContent, icon: p.querySelector('.pico svg') !== null, rows: Object.keys(${infoRows}) }; })()`;
   for (const [size, platform, theme] of [['mac', 'mac', 'light'], ['mac', 'mac', 'dark'], ['portrait', 'ios', 'light'], ['landscape', 'ios', 'dark']]) {
     await open(size, platform, theme);

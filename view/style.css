@@ -148,7 +148,7 @@ button.icon svg { display: block; }
 .coda-ios .meta { display: none; }
 .coda-ios .chev { order: 9; width: 14px; }
 .coda-ios .row.dir .chev { color: var(--coda-accent, #0a84ff); }
-.coda-ios .row.file .chev svg { visibility: visible; }
+.coda-ios .row.file .chev svg { visibility: inherit; } /* 不写 visible：目录树被属性页盖住（visibility: hidden）时，箭头不能透出来 */
 .coda-ios .row.dead .chev { display: none; }
 .coda-ios button { min-height: 44px; min-width: 44px; }
 .coda-ios .bar { gap: 0; padding: 0 8px; }
