@@ -188,16 +188,21 @@ const moreMenu = () => ({ items: [
   ] } },
 ] });
 
-// 换排序：旧的滚动位置对新顺序没有意义，待恢复的和上层的记录作废，两种视图都回到顶部；排序是全局的，存进 persisted。选当前项什么都不做。
+// 显示的条目或顺序变了、或者换了根目录：旧的滚动位置对不上，待恢复的和上层的记录作废，两种视图都回到顶部。换排序、显示隐藏文件、换根目录都走这里。
+function invalidateScroll() {
+  restore.clear();
+  trail.clear();
+  tree.scrollTo(0);
+  grid.scrollTo(0);
+}
+
+// 换排序：全局的，存进 persisted。选当前项什么都不做。
 function changeSort(sort) {
   const before = model.sort;
   model.setSort(sort);
   if (model.sort === before) return; // 同值：什么都没换
   persisted.sort = model.sort;
-  restore.clear();
-  trail.clear();
-  tree.scrollTo(0);
-  grid.scrollTo(0);
+  invalidateScroll();
 }
 
 // 换视图：全局一份，存进 persisted；两种视图各留着自己的内容和滚动位置，换回来还在。
@@ -223,7 +228,7 @@ function act(id, button) {
   else if (id === 'hidden') {
     model.setShowHidden(!model.showHidden);
     persisted.hidden = model.showHidden;
-    if (model.view === View.ICONS) { restore.drop('grid'); trail.clear(); grid.scrollTo(0); } // 显示的条目变了，旧位置对不上
+    invalidateScroll(); // 不管在哪种视图切换：显示的条目变了，两种视图的旧位置都对不上
   }
   else if (id === 'refresh') {
     conn.refresh();
@@ -382,7 +387,9 @@ function onRoot(data) {
   const before = model.root;
   if (data.state !== before?.state || data.path !== before?.path) menu.hide(); // 开着的菜单里的路径是旧根目录下的
   if (data.state !== RootState.READY || before?.path !== data.path) closeInfo(); // 属性页看的是旧根目录下的路径
+  const scope = model.scope;
   const done = model.receive(data);
+  if (model.scope !== scope) invalidateScroll(); // 换了根目录（同根重建不算）：旧根目录的位置和记录不能给新的用
   if (done && data.state === RootState.READY) {
     if (before?.path !== data.path) preview.reload(); else preview.refresh();
   }

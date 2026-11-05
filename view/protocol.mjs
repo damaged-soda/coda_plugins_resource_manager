@@ -60,6 +60,20 @@ export function imageType(name) {
   return dot < 0 ? null : IMAGE_TYPES[name.slice(dot + 1).toLowerCase()] ?? null;
 }
 
+// 相对路径的规则只在这一处：模块（lib/paths.mjs）校验请求，页面恢复保存的 cwd 时用同一个函数。
+// 空串是根目录；拒绝过长、控制字符、绝对路径和 `..`。返回 { segments }（去掉空段和 `.`）或 { problem }（给人看的原因）。
+export const MAX_PATH = 4096;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+export const hasControl = text => CONTROL.test(text);
+export function splitRelative(path) {
+  if (typeof path !== 'string' || path.length > MAX_PATH) return { problem: '路径无效' };
+  if (hasControl(path)) return { problem: '路径含控制字符' };
+  if (path.startsWith('/')) return { problem: '只接受相对路径' };
+  const segments = path.split('/').filter(part => part !== '' && part !== '.');
+  if (segments.includes('..')) return { problem: '路径不能含 ..' };
+  return { segments };
+}
+
 export const messageSize = message => JSON.stringify({ message }).length;
 
 // 带 code 的错误，模块里到处抛，主模块转成回答里的 error。

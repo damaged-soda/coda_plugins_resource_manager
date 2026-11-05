@@ -1,6 +1,7 @@
 // 图标视图的模型（view/model.mjs）：视图和 cwd 的保存与恢复、根目录的身份、请求集合、缓存共用、cwd 没了的回退。
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { parseRelative } from '../lib/paths.mjs';
 import { MAX_PARALLEL, parseState, putSession, trimState } from '../view/model.mjs';
 import { flush } from './support/fake.mjs';
 import { entries, manual } from './support/page.mjs';
@@ -522,4 +523,121 @@ test('没就绪时进入或换视图不发请求，就绪后按当时的集合�
   assert.equal((await t.lists()).length, 0);
   t.root(1, 'ready', '/r');
   assert.deepEqual(await listed(t), ['', 'a']);
+});
+
+// ---- 迟到的上层失败：只清它自己的子树，不毁掉现在正在加载的 cwd ----
+
+// cwd 在 a，刷新一次（旧请求留在路上），再进到 deeper；返回旧请求和 deeper 的请求。
+async function lateAncestor(t, deeper, { levels = ['a/', 'q/'] } = {}) {
+  t.model.view = 'icons';
+  await ready(t);
+  t.model.enter('a');
+  t.reply((await t.lists('a'))[0], entries([levels[1]]));
+  await flush();
+  t.model.refresh();
+  const old = (await t.lists('a')).at(-1);
+  for (const step of deeper) t.model.enter(step);
+  return old;
+}
+
+test('迟到的上层失败（刷新途中进入子目录）：子目录的回答照常提交，不卡在读取中', async () => {
+  const t = manual({ onLost: () => assert.fail('没有提示') });
+  const old = await lateAncestor(t, ['a/q']);
+  const child = (await t.lists('a/q')).at(-1);
+  t.fail(old, 'not_found');
+  await flush();
+  assert.equal(t.model.cwd, 'a/q', '迟到的结果不改新的 cwd');
+  assert.equal(t.model.dirs.has('a/q'), true, 'cwd 的条目没被清掉');
+  t.reply(child, entries(['valid.txt']));
+  await flush();
+  assert.equal(t.model.dirs.get('a/q').loaded, true);
+  assert.deepEqual(t.model.dirs.get('a/q').entries.map(entry => entry.name), ['valid.txt']);
+  assert.equal(t.model.dirs.get('a/q').loading, false);
+  assert.equal(t.model.dirs.has('a'), false, '失效的 a 自己仍然清掉');
+});
+
+test('迟到的上层失败：更深的层级（cwd 在 a/q/z）同样不受影响', async () => {
+  const t = manual();
+  const old = await lateAncestor(t, ['a/q', 'a/q/z']);
+  const deep = (await t.lists('a/q/z')).at(-1);
+  t.fail(old, 'not_found');
+  await flush();
+  assert.equal(t.model.cwd, 'a/q/z');
+  t.reply(deep, entries(['x.txt']));
+  await flush();
+  assert.equal(t.model.dirs.get('a/q/z').loaded, true);
+});
+
+test('迟到的失败属于当前目录的兄弟：cwd 和它的条目不动', async () => {
+  const t = manual();
+  t.model.view = 'icons';
+  await ready(t);
+  t.model.enter('a');
+  t.reply((await t.lists('a'))[0], entries(['q/', 'r/']));
+  await flush();
+  t.model.enter('a/q');
+  t.reply((await t.lists('a/q'))[0], entries(['k.txt']));
+  await flush();
+  t.model.expanded.add('a/r');
+  t.model.retry('a/r');
+  const sibling = (await t.lists('a/r')).at(-1);
+  t.model.leave();
+  t.model.enter('a/q');
+  t.fail(sibling, 'not_found');
+  await flush();
+  assert.equal(t.model.cwd, 'a/q');
+  assert.equal(t.model.dirs.get('a/q').loaded, true);
+  assert.equal(t.model.dirs.has('a/r'), false);
+});
+
+test('回退途中迟到的上层失败：回退那一级的请求照常提交', async () => {
+  const lost = [];
+  const t = manual({ onLost: path => lost.push(path) });
+  const old = await lateAncestor(t, ['a/q']);
+  t.reply((await t.lists('a/q')).at(-1), entries(['z/']));
+  await flush();
+  t.model.enter('a/q/z');
+  t.fail((await t.lists('a/q/z')).at(-1), 'not_found'); // 真正的 cwd 没了：退到 a/q
+  await flush();
+  assert.equal(t.model.cwd, 'a/q');
+  const retry = (await t.lists('a/q')).at(-1);
+  t.fail(old, 'not_found'); // 这时 a 的旧请求迟到
+  await flush();
+  assert.equal(t.model.cwd, 'a/q', '迟到的不改 cwd');
+  t.reply(retry, entries(['again.txt']));
+  await flush();
+  assert.deepEqual(t.model.dirs.get('a/q').entries.map(entry => entry.name), ['again.txt']);
+  assert.deepEqual(lost, ['a/q/z'], '一轮只提示一次');
+});
+
+test('真正的 cwd 被删（不是迟到的上层）：仍然逐级回退，一轮只提示一次', async () => {
+  const lost = [];
+  const t = manual({ onLost: path => lost.push(path) });
+  await lateAncestor(t, ['a/q']);
+  t.fail((await t.lists('a/q')).at(-1), 'not_found');
+  await flush();
+  assert.equal(t.model.cwd, 'a');
+  t.fail((await t.lists('a')).at(-1), 'not_found');
+  await flush();
+  assert.equal(t.model.cwd, '');
+  assert.deepEqual(lost, ['a/q'], '一轮只提示一次');
+});
+
+// ---- parseState：cwd 的形状和后端的路径规则一致 ----
+
+test('parseState：后端会拒绝的 cwd 当作形状不对，回到根目录；合法的名字照常恢复', () => {
+  const read = cwd => parseState({ v: 1, sessions: { A: { at: 1, cwd, root: '/r' } } }).sessions.A;
+  for (const bad of ['../escape', 'a/../b', '..', 'a/..', 'a/b\u0000c', 'a\nb', 'a/\u007f', '\u001fx']) {
+    assert.equal(read(bad).cwd, undefined, JSON.stringify(bad));
+    assert.equal(read(bad).root, undefined, '和 cwd 成对：一起当作没有');
+  }
+  for (const good of ['a/b', 'my docs/中文 目录', 'a..b/..c/d..', '', 'x'.repeat(1024)]) assert.equal(read(good).cwd, good, JSON.stringify(good));
+});
+
+test('parseState 认的 cwd，后端的 parseRelative 都不会拒绝（两边的规则不走样）', () => {
+  const corpus = ['', 'a', 'a/b', '../a', 'a/../b', '..', '.', './a', 'a//b', 'a/', '/a', 'a/b\u0000', 'a\tb', '\u007f', 'a b/中文', '..a/b..', 'a/./b', 'a/...'];
+  for (const cwd of corpus) {
+    const accepted = parseState({ v: 1, sessions: { A: { at: 1, cwd, root: '/r' } } }).sessions.A.cwd !== undefined;
+    if (accepted) assert.doesNotThrow(() => parseRelative(cwd), JSON.stringify(cwd));
+  }
 });

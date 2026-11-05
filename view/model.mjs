@@ -1,5 +1,5 @@
 // 页面的纯状态：目录树、状态保留。不碰 DOM，请求与代次在 connection.mjs，设计见 docs/design/phase-1.md 第 6、7 节。
-import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort } from './protocol.mjs';
+import { DEFAULT_SORT, ErrorCode, RootState, Type, parseSort, splitRelative } from './protocol.mjs';
 
 export const STATE_LIMIT = 96 * 1024;
 export const MAX_PARALLEL = 8;
@@ -220,7 +220,8 @@ export class Model {
   // 清掉子树后原目录对象没了，原请求的检查必然为假，但回退不靠它：回退看的是导航上下文，每一级有自己的请求。
   #lost(path, nav) {
     const covers = nav === this.#nav && inside(this.cwd, path);
-    this.#drop(path);
+    // 迟到的上层失败（发出后用户已经进了别处）：清它的子树，但正在加载的 cwd 的条目留着，不然它的回答提交不上。
+    this.#drop(path, covers ? null : this.cwd);
     if (!covers) return;
     this.#nav++;
     this.cwd = parentOf(path);
@@ -232,8 +233,8 @@ export class Model {
     this.retry(this.cwd);
   }
 
-  #drop(path) {
-    for (const key of [...this.dirs.keys()]) if (inside(key, path)) this.dirs.delete(key);
+  #drop(path, keep = null) {
+    for (const key of [...this.dirs.keys()]) if (key !== keep && inside(key, path)) this.dirs.delete(key);
     for (const key of [...this.expanded]) if (inside(key, path)) this.expanded.delete(key);
   }
 
@@ -299,6 +300,9 @@ const strings = (value, max) => (Array.isArray(value) ? value.filter(s => typeof
 const parseLoaded = raw => Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {})
   .filter(([path, count]) => path.length <= 1024 && Number.isSafeInteger(count) && count > 0 && count <= MAX_LOADED).slice(0, MAX_LOADED_DIRS));
 
+// cwd 要是后端认的相对路径（规则同 lib/paths.mjs），而且写法规整：model 里的路径都是 joinPath 拼出来的，不带空段和 `.`。
+const cleanRelative = path => { const { segments } = splitRelative(path); return segments !== undefined && segments.join('/') === path; };
+
 // 读回来的值可能是别的版本或坏的，只认自己的形状。
 export function parseState(raw) {
   const state = { v: 1, seq: 0, hidden: false, sort: DEFAULT_SORT, view: View.LIST, sessions: {} };
@@ -320,7 +324,7 @@ export function parseState(raw) {
     };
     // cwd 和存它时的根目录：超长或形状不对当作没有，回到根目录。旧版本没有这两个字段。
     const path = value => (typeof value === 'string' && value.length <= 1024 ? value : undefined);
-    if (path(item.cwd) !== undefined && path(item.root) !== undefined && !item.cwd.startsWith('/')) Object.assign(state.sessions[id], { cwd: item.cwd, root: item.root });
+    if (path(item.cwd) !== undefined && path(item.root) !== undefined && cleanRelative(item.cwd)) Object.assign(state.sessions[id], { cwd: item.cwd, root: item.root });
     const loaded = parseLoaded(item.loaded);
     if (Object.keys(loaded).length > 0) state.sessions[id].loaded = loaded;
   }

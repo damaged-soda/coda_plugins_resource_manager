@@ -481,3 +481,74 @@ test('列数变化（iPhone 旋转）：第一个可见的单元格不变', asyn
   const first = cells(page).map(node => Number(node.dataset.i));
   assert.ok(first.includes(28) && first.includes(31), '这一行的单元格画出来了');
 });
+
+// ---- 失效：隐藏文件变化、换根目录要让两种视图都回到顶部，待恢复的位置和上层的记录一起作废 ----
+
+const chooseMore = async ({ page, host }, label) => { host.events.toolbar({ id: 'more' }); pick(page, label); await flush(); };
+
+test('列表视图里切换显示隐藏文件：列表和图标视图都回到顶部', async t => {
+  const ctx = await start(t, { coda: TOOLBAR });
+  const { page } = ctx;
+  scrollTo(page, ROW * 4);
+  await showAs(ctx, 'list');
+  page.tree.scrollTop = 24 * 9;
+  page.tree.dispatch('scroll');
+  await chooseMore(ctx, '显示隐藏文件');
+  assert.equal(page.tree.scrollTop, 0, '列表回到顶部');
+  await showAs(ctx, 'icons');
+  assert.equal(body(page).scrollTop, 0, '图标视图也回到顶部');
+});
+
+test('切换显示隐藏文件：上层的记录和另一个视图待恢复的位置作废', async t => {
+  const ctx = await start(t, { icons: false, coda: TOOLBAR, saved: { cwd: '', root: '/A', scroll: { tree: 0, top: 0, left: 0, grid: ROW * 3, gridSort: 'name' } } });
+  await chooseMore(ctx, '显示隐藏文件');
+  await showAs(ctx, 'icons');
+  assert.equal(body(ctx.page).scrollTop, 0, '待恢复的网格位置作废，切过去不跳');
+  scrollTo(ctx.page, ROW * 2);
+  await click(ctx.page, 'dir');
+  await showAs(ctx, 'list');
+  await chooseMore(ctx, '显示隐藏文件');
+  await showAs(ctx, 'icons');
+  head(ctx.page).children[0].dispatch('click');
+  await flush();
+  assert.equal(body(ctx.page).scrollTop, 0, '回到根目录用不上切换之前记下的 ROW * 2');
+});
+
+test('页面存续期间换了根目录：图标视图和列表都回到顶部', async t => {
+  const ctx = await start(t, { coda: TOOLBAR });
+  const { page, host } = ctx;
+  scrollTo(page, ROW * 4);
+  await showAs(ctx, 'list');
+  page.tree.scrollTop = 24 * 9;
+  page.tree.dispatch('scroll');
+  await showAs(ctx, 'icons');
+  page.post({ type: 'root', generation: host.generation, state: 'ready', path: '/NEW' });
+  await flush();
+  assert.equal(body(page).scrollTop, 0, '图标视图');
+  await showAs(ctx, 'list');
+  assert.equal(page.tree.scrollTop, 0, '列表');
+});
+
+test('换根目录：旧根目录的上层位置不会被新根目录复用', async t => {
+  const ctx = await start(t);
+  const { page, host } = ctx;
+  scrollTo(page, ROW * 2);
+  await click(page, 'dir');
+  page.post({ type: 'root', generation: host.generation, state: 'ready', path: '/B' });
+  await flush();
+  assert.ok(cellNamed(page, 'f00.txt'), '回到新根目录的根层');
+  assert.equal(body(page).scrollTop, 0, '不是旧根目录记下的 ROW * 2');
+});
+
+test('换根目录失效不误伤：同根的 root 消息（含重建、重复就绪）保留 cwd 和上层位置', async t => {
+  const ctx = await start(t);
+  const { page, host } = ctx;
+  scrollTo(page, ROW * 2);
+  await click(page, 'dir');
+  page.post({ type: 'root', generation: host.generation, state: 'ready', path: '/A' });
+  await flush();
+  assert.deepEqual(cells(page).map(node => node.textContent), ['inner', 'x.txt', 'y.txt'], 'cwd 还在 dir');
+  head(page).children[0].dispatch('click');
+  await flush();
+  assert.equal(body(page).scrollTop, ROW * 2, '上层的位置还在');
+});
