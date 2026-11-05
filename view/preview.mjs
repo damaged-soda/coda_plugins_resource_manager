@@ -1,7 +1,9 @@
 // 文件预览：只接收路径和读块的能力，不依赖树的状态。readFile 是纯逻辑；mountPreview 才碰 DOM。
+import { h } from './dom.mjs';
 import { formatSize } from './format.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { ContentKind, EntryKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
+import { clippedSelection, linesOf } from './selection.mjs';
 
 function fromBase64(data) {
   const binary = atob(data), bytes = new Uint8Array(binary.length);
@@ -48,20 +50,13 @@ export async function readFile(read, { prev = null, onProgress = () => {}, cance
 const formatTime = ms => new Date(ms).toLocaleString('zh-CN', { hour12: false });
 export const lineCount = text => (text === '' ? 1 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
 
-const h = (tag, attributes = {}, ...children) => {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attributes)) {
-    if (key.startsWith('on')) node.addEventListener(key.slice(2), value); else if (value != null && value !== false) node.setAttribute(key, value);
-  }
-  node.append(...children.flat().filter(child => child != null));
-  return node;
-};
-
 // read(path, offset) → Promise<chunk 回答>，会话换了会以 stale 错误拒绝；copy(text) 复制路径。
 // actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path) }]，预览不知道它们做什么。
 // copyInHead：false 时头部不放「复制路径」（iPhone 放在底部工具条），由页面调 copyPath()。
 // back：给了就在头部最左边放「返回」（Mac 侧栏预览：原生工具栏项目只能在右侧）；文件页和 iPhone 不传。
-export function mountPreview(el, { read, copy, actions = [], copyInHead = true, back = null }) {
+// selectionMenu(event, { path, text, startLine, endLine })：给了就接管正文里选中文字的右键（只有 Mac 传）；预览不知道菜单里是什么。
+// 选区为空、或裁到正文里之后为空时不接管，走系统默认。内容和行号在这里取好，交出去之后和选区无关。
+export function mountPreview(el, { read, copy, actions = [], copyInHead = true, back = null, selectionMenu = null }) {
   const name = h('div', { class: 'pname truncate' }), meta = h('div', { class: 'pmeta caption secondary truncate' }, ' ');
   const fileIcon = h('span', { class: 'pico', 'aria-hidden': 'true' });
   // 图标按钮：可访问名称和 Mac 的悬停提示都是 label；没有图标的退回文字。
@@ -99,7 +94,9 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
     setMeta([dir, lines, formatSize(result.size), note].filter(Boolean).join(' · '), `修改于 ${formatTime(result.mtimeMs)}`);
     if (result.kind === ContentKind.TEXT) {
       const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' }, Array.from({ length: lineCount(result.text) }, (_, i) => i + 1).join('\n'));
-      body.replaceChildren(h('div', { class: 'code' }, gutter, h('pre', { class: 'text selectable' }, result.text)));
+      const text = h('pre', { class: 'text selectable' }, result.text);
+      if (selectionMenu) text.addEventListener('contextmenu', event => onSelect(event, text));
+      body.replaceChildren(h('div', { class: 'code' }, gutter, text));
     } else if (result.kind === ContentKind.IMAGE && result.bytes.length > 0) {
       objectUrl = URL.createObjectURL(new Blob([result.bytes], { type: imageType(path) }));
       body.replaceChildren(h('div', { class: 'image' }, h('img', { src: objectUrl, alt: path, draggable: 'false' })));
@@ -107,6 +104,13 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
       const big = result.kind === ContentKind.IMAGE ? `图片超过 ${formatSize(IMAGE_LIMIT)}，不预览。` : '二进制文件，不预览。';
       notice(big, `${formatSize(result.size)}，修改于 ${formatTime(result.mtimeMs)}`);
     }
+  }
+
+  function onSelect(event, text) {
+    const picked = clippedSelection(text);
+    if (!picked) return;
+    event.preventDefault();
+    selectionMenu(event, { path, text: picked.text, ...linesOf(text.textContent, picked.start, picked.start + picked.text.length) });
   }
 
   function failure(error, silent, retry) {

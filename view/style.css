@@ -93,7 +93,9 @@ button.icon svg { display: block; }
 
 #notice:focus { outline: none; }
 .menu { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - var(--safe-left) - var(--safe-right) - 8px)); padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
-  background: var(--coda-card, var(--coda-background, #fff)); }
+  background: var(--coda-card, var(--coda-background, #fff));
+  /* 高度有上限：内容多（长路径加五项）时在菜单里滚动，不超出安全区；位置由 menu.mjs 夹在安全区内。 */
+  max-height: calc(100vh - var(--safe-top) - var(--safe-bottom) - 8px); overflow-y: auto; overscroll-behavior: contain; }
 .menu button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 10px; border-radius: var(--coda-radius, 6px); }
 .check { flex: none; display: grid; place-items: center; width: 16px; color: var(--coda-accent, #0a84ff); }
 .check svg { display: block; }
@@ -104,9 +106,20 @@ button.icon svg { display: block; }
 .menu-head { padding: 4px 10px 2px; font-weight: 600; }
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
+/* 底部的短提示：普通的是前景色（成功），.warn 是橙色（失败）。 */
 .hint { position: fixed; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 10;
   padding: 8px 12px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
-  background: var(--coda-card, var(--coda-background, #fff)); color: var(--coda-orange, #b25000); }
+  background: var(--coda-card, var(--coda-background, #fff)); color: var(--coda-foreground, #1d1d1f); }
+.hint.warn { color: var(--coda-orange, #b25000); }
+
+/* 属性页：头部和正文同预览（.preview 的 .phead、.pbody）；正文是 标签 值 两列，值可以折行、可以选中。 */
+.ibody { padding: 8px 12px calc(12px + var(--safe-bottom)); }
+.irow { display: flex; gap: 12px; padding: 5px 0; }
+.ilabel { flex: none; width: 5.5em; text-align: right; }
+.ivalue { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.ivalue .warn { color: var(--coda-orange, #b25000); }
+.coda-ios .irow { flex-direction: column; gap: 0; padding: 8px 4px; }
+.coda-ios .ilabel { width: auto; text-align: left; font-size: .85em; }
 
 /* 悬停只在有鼠标时：触摸后不会留着。 */
 @media (hover: hover) {

@@ -101,7 +101,7 @@ export function visible(node) {
 
 // 装上 window、document 等全局并加载真实的页面入口（默认 view/app.mjs），每次得到全新的模块实例。
 let instance = 0;
-export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu', 'hint'] } = {}) {
+export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu', 'hint', 'info'] } = {}) {
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   elements.bar.hidden = true;
   for (const id of ['menu', 'hint']) if (elements[id]) elements[id].hidden = true;
@@ -128,4 +128,4 @@ export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree'
   };
 }
 
-export const loadFileApp = (t, coda) => loadApp(t, coda, { entry: 'file-app.mjs', ids: ['bar', 'preview', 'notice'] });
+export const loadFileApp = (t, coda) => loadApp(t, coda, { entry: 'file-app.mjs', ids: ['bar', 'preview', 'notice', 'menu', 'hint'] });

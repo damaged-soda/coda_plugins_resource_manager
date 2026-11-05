@@ -1,6 +1,6 @@
 // 页面到模块的连接：请求与回答（Link）、hello 握手与超时、按代次分发协议消息。
 // 树页和文件页共用。只管连接：树的 Model、状态保存、提示文案和 DOM 都在各自的页面里。
-import { ErrorCode, Type, isReply } from './protocol.mjs';
+import { ErrorCode, Type, isReply, messageSize } from './protocol.mjs';
 
 export const TIMEOUT_MS = 30_000;
 
@@ -35,6 +35,11 @@ export class Link {
   reset(generation) {
     this.generation = generation;
     for (const requestId of [...this.pending.keys()]) this.#finish(requestId, entry => entry.reject(new Stale()));
+  }
+
+  // 这条请求发出去的消息有多大（含信封）：用下一个请求号算，和 call 真正发出的一致。页面用它在发之前判断会不会超过消息上限。
+  size(type, fields) {
+    return messageSize({ type, generation: this.generation, requestId: `q${this.#next}`, ...fields });
   }
 
   // options.signal：中止后请求静默作废（Cancelled）。options.cancel：中止时还要告诉模块的消息类型，带 generation 和 requestId；

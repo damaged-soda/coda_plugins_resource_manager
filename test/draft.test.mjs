@@ -56,6 +56,11 @@ test('compose：文字类的接在后面，前后各一个空格；内容类另�
     ['看看', 'a\nb', true, '看看\na\nb\n'],
     ['看看\n', 'a\nb', true, '看看\na\nb\n'],
     ['看看 ', 'a\nb', true, '看看 \na\nb\n'],
+    // 内容本身以换行结尾（三击选行等）：不再多加，免得多出一个空行
+    ['', 'a\nb\n', true, 'a\nb\n'],
+    ['看看\n', 'a\n', true, '看看\na\n'],
+    ['看看', 'a\n\n', true, '看看\na\n\n'],
+    ['', '\n', true, '\n'],
   ];
   for (const [current, text, block, expected] of cases) assert.equal(compose(current, text, block), expected, JSON.stringify([current, block]));
 });

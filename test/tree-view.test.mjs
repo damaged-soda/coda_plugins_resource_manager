@@ -28,7 +28,7 @@ test('iconFor：目录、链接、其他按种类；文件按扩展名，不分�
   assert.equal(file('LOGO.PNG'), 'image');
   assert.equal(file('notes.txt'), 'doc');
   assert.equal(file('Makefile'), 'doc');
-  assert.equal(file('.gitignore'), 'doc', '点开头的没有扩展名');
+  assert.equal(file('.gitignore'), 'doc', '整个文件名在表里（Git 配置），glyph 先指文档');
   assert.equal(file('archive.tar.gz'), 'doc');
   assert.equal(file('trailing.'), 'doc');
 });

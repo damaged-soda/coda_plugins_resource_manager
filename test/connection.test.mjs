@@ -8,6 +8,7 @@ import test from 'node:test';
 import { activate } from '../main.mjs';
 import { createListing } from '../lib/tree.mjs';
 import { Cancelled, RequestError, Stale, connect } from '../view/connection.mjs';
+import { MESSAGE_LIMIT, messageSize } from '../view/protocol.mjs';
 import { countingFs } from './support/countfs.mjs';
 import { checkoutOf, deferred, fakeCoda, flush, tempDir, trackTimers, waitFor } from './support/fake.mjs';
 
@@ -243,4 +244,21 @@ test('connect 接真实模块：stat、dir_size、add_text 的往返；取消真
 
   const sized = await page.link.call('dir_size', { path: '' });
   assert.deepEqual([sized.type, sized.items, sized.size, sized.complete], ['sized', 14, 12 + 5, true]);
+});
+
+test('Link.size：按完整信封算，和真正发出的消息一样大，页面用它在发之前判断会不会超过消息上限', async t => {
+  const page = pageOf(t);
+  for (const text of ['a', 'x'.repeat(5000), '字'.repeat(300), 'quote"and\\slash\n'.repeat(50)]) {
+    const fields = { text, block: true };
+    const expected = page.link.size('add_text', fields);
+    page.link.call('add_text', fields).catch(() => {});
+    await flush();
+    const message = page.sent.at(-1);
+    assert.equal(messageSize(message), expected, text.slice(0, 8));
+    assert.equal(message.requestId, `q${page.sent.length}`, '用的就是下一个请求号');
+  }
+  const base = page.link.size('add_text', { text: '', block: false });
+  const edge = 'e'.repeat(MESSAGE_LIMIT - base);
+  assert.equal(page.link.size('add_text', { text: edge, block: false }), MESSAGE_LIMIT, '正好等于上限');
+  assert.equal(page.link.size('add_text', { text: `${edge}e`, block: false }), MESSAGE_LIMIT + 1);
 });

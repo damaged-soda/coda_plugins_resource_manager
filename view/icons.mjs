@@ -22,22 +22,95 @@ const SHAPES = {
   turn: { shapes: [['path', { d: 'M5 18v-4a4 4 0 0 1 4-4h10' }], ['path', { d: 'm15 6 4 4-4 4' }]] },
 };
 
-// 扩展名表：不在表里的文件都是文档。
-const BY_EXT = {
-  code: ['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'yml', 'yaml', 'toml', 'html', 'css', 'scss', 'vue', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift',
-    'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'lua', 'sh', 'bash', 'zsh', 'sql', 'xml'],
-  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'heic', 'avif'],
+// 种类表：种类文字（属性页）和图标（目录树、预览头部）查同一张，不另写一份。
+// glyph 是上面 SHAPES 里的图标名；tone 是第 3 步配色用的色调名，现在还没有用。
+const KINDS = {
+  dir: { glyph: 'folder', tone: 'accent', label: '文件夹' },
+  link: { glyph: 'link', tone: 'muted', label: '链接' },
+  other: { glyph: 'other', tone: 'muted', label: '特殊文件' },
+  file: { glyph: 'doc', tone: 'gray', label: '其他文件' },
+  text: { glyph: 'doc', tone: 'gray', label: '文本' },
+  markdown: { glyph: 'doc', tone: 'blue', label: 'Markdown 文档' },
+  typescript: { glyph: 'code', tone: 'blue', label: 'TypeScript' },
+  javascript: { glyph: 'code', tone: 'yellow', label: 'JavaScript' },
+  python: { glyph: 'code', tone: 'green', label: 'Python' },
+  go: { glyph: 'code', tone: 'teal', label: 'Go' },
+  rust: { glyph: 'code', tone: 'orange', label: 'Rust' },
+  swift: { glyph: 'code', tone: 'orange', label: 'Swift' },
+  c: { glyph: 'code', tone: 'blue', label: 'C / C++' },
+  java: { glyph: 'code', tone: 'red', label: 'Java / Kotlin' },
+  ruby: { glyph: 'code', tone: 'red', label: 'Ruby' },
+  code: { glyph: 'code', tone: 'gray', label: '源代码' },
+  json: { glyph: 'code', tone: 'yellow', label: 'JSON' },
+  html: { glyph: 'code', tone: 'orange', label: 'HTML / XML' },
+  css: { glyph: 'code', tone: 'purple', label: 'CSS' },
+  yaml: { glyph: 'code', tone: 'pink', label: 'YAML / TOML' },
+  shell: { glyph: 'code', tone: 'green', label: 'Shell 脚本' },
+  image: { glyph: 'image', tone: 'purple', label: '图片' },
+  video: { glyph: 'doc', tone: 'pink', label: '视频' },
+  audio: { glyph: 'doc', tone: 'pink', label: '音频' },
+  pdf: { glyph: 'doc', tone: 'red', label: 'PDF 文档' },
+  archive: { glyph: 'doc', tone: 'orange', label: '压缩包' },
+  sheet: { glyph: 'doc', tone: 'green', label: '表格' },
+  database: { glyph: 'doc', tone: 'teal', label: '数据库' },
+  font: { glyph: 'doc', tone: 'gray', label: '字体' },
+  lock: { glyph: 'doc', tone: 'gray', label: '锁文件' },
+  git: { glyph: 'doc', tone: 'orange', label: 'Git 配置' },
+  env: { glyph: 'doc', tone: 'yellow', label: '环境变量' },
+  manifest: { glyph: 'doc', tone: 'green', label: '包清单' },
+  license: { glyph: 'doc', tone: 'gray', label: '许可证' },
 };
-const EXT_ICON = new Map(Object.entries(BY_EXT).flatMap(([name, exts]) => exts.map(ext => [ext, name])));
 
-// 图标名：目录、链接、其他按种类；文件按扩展名（不分大小写；.gitignore 这类点开头的没有扩展名），没有匹配的是文档。
-export function iconFor({ kind, name }) {
-  if (kind === EntryKind.DIR) return 'folder';
-  if (kind === EntryKind.LINK) return 'link';
-  if (kind === EntryKind.OTHER) return 'other';
-  const dot = name.lastIndexOf('.');
-  return (dot > 0 && EXT_ICON.get(name.slice(dot + 1).toLowerCase())) || 'doc';
+// 文件名（小写）优先，再按扩展名（小写）；都不在表里的是「其他文件」。
+const NAMES = {
+  git: ['.gitignore', '.gitattributes', '.gitmodules', '.gitconfig', '.gitkeep', '.mailmap'],
+  env: ['.env', '.envrc'],
+  manifest: ['package.json', 'cargo.toml', 'go.mod', 'pyproject.toml', 'requirements.txt', 'gemfile', 'package.swift', 'pom.xml', 'build.gradle', 'composer.json', 'setup.py'],
+  lock: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'cargo.lock', 'gemfile.lock', 'poetry.lock', 'go.sum', 'composer.lock', 'bun.lockb', 'podfile.lock'],
+  license: ['license', 'licence', 'copying', 'unlicense', 'license.md', 'license.txt', 'licence.md', 'licence.txt', 'copying.md', 'copying.txt'],
+};
+const EXTENSIONS = {
+  text: ['txt', 'text', 'log', 'rtf'],
+  markdown: ['md', 'markdown', 'mdx'],
+  typescript: ['ts', 'tsx', 'mts', 'cts'],
+  javascript: ['js', 'mjs', 'cjs', 'jsx'],
+  python: ['py', 'pyw', 'pyi'],
+  go: ['go'],
+  rust: ['rs'],
+  swift: ['swift'],
+  c: ['c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh'],
+  java: ['java', 'kt', 'kts'],
+  ruby: ['rb', 'erb'],
+  code: ['vue', 'scss', 'sass', 'less', 'cs', 'php', 'lua', 'sql', 'dart', 'scala', 'r', 'pl'],
+  json: ['json', 'jsonc', 'json5'],
+  html: ['html', 'htm', 'xml', 'xhtml', 'plist'],
+  css: ['css'],
+  yaml: ['yml', 'yaml', 'toml'],
+  shell: ['sh', 'bash', 'zsh', 'fish'],
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'heic', 'avif', 'tif', 'tiff'],
+  video: ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'],
+  audio: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'aiff'],
+  pdf: ['pdf'],
+  archive: ['zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar'],
+  sheet: ['csv', 'tsv', 'xls', 'xlsx', 'numbers', 'ods'],
+  database: ['db', 'sqlite', 'sqlite3'],
+  font: ['ttf', 'otf', 'woff', 'woff2'],
+};
+const invert = table => new Map(Object.entries(table).flatMap(([id, keys]) => keys.map(key => [key, id])));
+const BY_NAME = invert(NAMES), BY_EXT = invert(EXTENSIONS);
+
+// 一个条目的种类：{ glyph, tone, label }。目录、链接、其他按种类；文件先按整个文件名，再按扩展名（点开头的名字没有扩展名）。
+// 指向工作目录内的链接按目标的种类显示（条目自己的 kind 已经是目标的）。
+export function kindOf({ kind, name }) {
+  if (kind === EntryKind.DIR) return KINDS.dir;
+  if (kind === EntryKind.LINK) return KINDS.link;
+  if (kind === EntryKind.OTHER) return KINDS.other;
+  const lower = String(name).toLowerCase(), dot = lower.lastIndexOf('.');
+  return KINDS[BY_NAME.get(lower) ?? (lower.startsWith('.env.') ? 'env' : undefined) ?? (dot > 0 ? BY_EXT.get(lower.slice(dot + 1)) : undefined) ?? 'file'];
 }
+
+// 图标名：种类表里的 glyph。
+export const iconFor = entry => kindOf(entry).glyph;
 
 // 造一个 SVG 元素；size 是点数，CSS 可以按平台覆盖。
 export function icon(name, size = 16) {

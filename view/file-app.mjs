@@ -1,7 +1,11 @@
 // 文件视图的页面入口：读一个文件。会话和路径来自 coda.args（启动值），之后的变化走 context 事件；
 // 连接在 connection.mjs，预览在 preview.mjs，这里不创建目录树。设计见 docs/design/phase-2.md 第 7 节。
+// Mac 的独立窗口里选中文字右键可以添加到聊天（第 13.7 节）；iPhone 不接，用系统的选区菜单。
 import { EXIT, paintBar } from './bar.mjs';
+import { createChat } from './chat.mjs';
 import { connect } from './connection.mjs';
+import { mountHint } from './hint.mjs';
+import { mountMenu } from './menu.mjs';
 import { noticeText } from './model.mjs';
 import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
@@ -29,7 +33,13 @@ let root = null;
 let restore = parseScroll(quiet(() => coda.getState()));
 
 const conn = connect(coda, { handlers: { session: onSession, root: onRoot, changed: onChanged }, onStatus: () => schedule() });
-const preview = mountPreview($('preview'), { read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text), copyInHead: !isIOS });
+const hint = mountHint($('hint'));
+const menu = mountMenu($('menu'));
+const chat = createChat({ link: conn.link, copy: text => coda.copy(text), hint });
+const preview = mountPreview($('preview'), {
+  read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text), copyInHead: !isIOS,
+  selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
+});
 
 // 模块跟随的会话和启动参数里的不是同一个时（换会话的两条消息没有先后保证），不能读，等对上。
 const ready = () => want.path !== null && session === want.session && root?.state === RootState.READY;
@@ -84,6 +94,8 @@ function paintNotice() {
 function onSession(data) {
   park();
   preview.close();
+  menu.hide();
+  hint.hide();
   session = data.session ?? null;
   root = null;
   schedule();
@@ -105,7 +117,7 @@ function onChanged() {
 // ---- 参数变了：换文件或换会话，旧文件的滚动位置不带过去 ----
 quiet(() => coda.on('context', ({ args }) => {
   const next = argsOf(args);
-  if (next.path !== want.path || next.session !== want.session) { restore = null; preview.close(); }
+  if (next.path !== want.path || next.session !== want.session) { restore = null; preview.close(); menu.hide(); hint.hide(); }
   want = next;
   schedule();
 }));
@@ -137,6 +149,7 @@ function saveNow() {
 // visibility: false 之后只保证同步事件处理完，所以同步保存。
 quiet(() => coda.on('visibility', visible => { if (!visible) saveNow(); }));
 preview.onScroll(queueSave);
+preview.onScroll(menu.hide);
 
 render();
 conn.hello();
