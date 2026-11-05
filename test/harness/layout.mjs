@@ -73,6 +73,14 @@ const until = async (expr, what) => {
 // 页面画完两帧：滚动事件在帧的开头派发、先于 requestAnimationFrame 的回调，所以滚动之后画两帧，滚动引起的重画和关菜单都已经发生。
 const frames = () => within(evaluate(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`), 10000, '等页面画两帧');
 
+// 改视口：等页面量到新尺寸并画完两帧。窗口的 resize 事件在帧的开头派发：不等的话它会迟到，把之后才打开的菜单关掉。所有改视口的地方都走这里。
+async function setViewport(size, platform) {
+  const [w, h] = SIZES[size];
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
+  await until(`innerWidth === ${w} && innerHeight === ${h}`, `视口变成 ${size}`);
+  await frames();
+}
+
 async function start() {
   // ---- 假工作目录 ----
   await mkdir(shots, { recursive: true });
@@ -121,8 +129,8 @@ const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], tiny:
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
 // ready：载入后要等到出现的元素，列表是 .row.entry，图标视图是 .gi。
 async function open(size, platform, theme, { keep = false, state = null, extra = '', ready = '.row.entry' } = {}) {
-  const [w, h, safe] = SIZES[size];
-  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
+  const safe = SIZES[size][2];
+  await setViewport(size, platform);
   const stamp = Date.now(), url = `${serverUrl}view/index.html?platform=${platform}&theme=${theme}&safe=${safe}&t=${stamp}${extra}`;
   if (!keep) {
     await send('Page.navigate', { url: `${serverUrl}view/index.html` });
@@ -139,8 +147,8 @@ async function open(size, platform, theme, { keep = false, state = null, extra =
 }
 // 文件页：query 是额外的参数；等正文或说明区出现。
 async function openFile(size, theme, query = 'session=A&path=notes.txt') {
-  const [w, h, safe] = SIZES[size];
-  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+  const safe = SIZES[size][2];
+  await setViewport(size, 'ios');
   const stamp = Date.now();
   await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${stamp}` });
   await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入'); // 同 open：不能让上一页的正文骗过下面的等待
@@ -148,7 +156,11 @@ async function openFile(size, theme, query = 'session=A&path=notes.txt') {
 }
 // ⋯ 菜单：iPhone 点页内的 ⋯（同步），Mac 照控制页的方式发 { harness: 'toolbar', id: 'more' }（页面收到消息才处理）。
 // 返回时消息已经处理完，菜单已经开了（或再按一次关了）。
-const openMore = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
+const openMore = async platform => {
+  await frames(); // 先让之前设的滚动、改的视口引出的事件都派发完：迟到的滚动、resize 事件会把刚打开的菜单关掉
+  return openMoreNow(platform);
+};
+const openMoreNow = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
   : `new Promise(resolve => { const seen = event => { if (event.data?.harness !== 'toolbar') return; removeEventListener('message', seen); resolve(); }; addEventListener('message', seen); postMessage({ harness: 'toolbar', id: 'more' }, '*'); })`);
 const menuClosed = `document.getElementById('menu').hidden && document.getElementById('submenu').hidden`;
 // 页面发出的请求都有了回答。
@@ -156,10 +168,11 @@ const settled = what => until(`window.__rpc.open.size === 0`, `${what}：页面�
 // ⋯ 菜单的第一层：刷新、显示隐藏文件、「显示」；视图和排序在「显示」里（Mac 放得下时在侧面板 #submenu，放不下和 iPhone 是菜单里的下一层）。
 const ROOT_LABELS = ['刷新', '显示隐藏文件', '显示'];
 // 菜单里现在看得到的按钮里找 label 并点它（JS 的 click，同步）；返回找到没有。
-const clickItem = label => evaluate(`(() => { const item = [...document.querySelectorAll('#menu button, #submenu:not([hidden]) button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
+const clickItem = label => evaluate(`(() => { const item = [...document.querySelectorAll('#menu:not([hidden]) button, #submenu:not([hidden]) button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
 // 在 ⋯ 菜单里选一项，等到它真正做完：菜单（两个面板）关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
 const pick = async (label, platform = 'mac', { done = null, what = '' } = {}) => {
   await openMore(platform);
+  if (await evaluate(menuClosed)) throw new Error(`点「${label}」之前菜单就关了（被迟到的滚动、resize 之类的事件关掉）`);
   if (!ROOT_LABELS.includes(label) && !(await clickItem('显示'))) throw new Error('菜单里没有「显示」这一项');
   if (!(await clickItem(label))) throw new Error(`菜单里没有「${label}」这一项`);
   await until(menuClosed, `选「${label}」后菜单关闭`);
@@ -345,12 +358,7 @@ try {
   };
   const press = key => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)} }))`);
   const hover = label => evaluate(`(() => { const b = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); b.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' })); return b.getAttribute('aria-expanded'); })()`);
-  // 改视口：等页面量到新尺寸并画完两帧（窗口的 resize 事件在帧的开头派发），免得它迟到、把之后才打开的菜单关掉。
-  const viewport = async (size, platform) => {
-    await send('Emulation.setDeviceMetricsOverride', { width: SIZES[size][0], height: SIZES[size][1], deviceScaleFactor: 2, mobile: platform === 'ios' });
-    await until(`innerWidth === ${SIZES[size][0]} && innerHeight === ${SIZES[size][1]}`, `视口变成 ${size}`);
-    await frames();
-  };
+  const viewport = setViewport;
   const gridShown = `getComputedStyle(document.getElementById('grid')).visibility === 'visible' && document.querySelector('#grid .gi') !== null`;
   const treeShown = `getComputedStyle(document.getElementById('tree')).visibility === 'visible' && document.querySelector('.row.entry') !== null`;
 
@@ -736,7 +744,7 @@ try {
     return { display: getComputedStyle(b).display, height: r.height, top: r.top, shown: shown.map(x => x.textContent), clickable: shown.map(x => { const q = x.getBoundingClientRect(); return document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('button') === x; }),
       title: b.querySelector('.bar-title')?.textContent ?? null, more: b.querySelector('[aria-label="更多"]') !== null, headTop: document.querySelector('#info .phead')?.getBoundingClientRect().top }; })()`;
   // 只改视口，不重载页面：旋转屏幕。
-  const rotate = size => send('Emulation.setDeviceMetricsOverride', { width: SIZES[size][0], height: SIZES[size][1], deviceScaleFactor: 2, mobile: true });
+  const rotate = size => setViewport(size, 'ios');
   const readTree = async size => {
     const names = await evaluate(phoneBar), box = await evaluate(barBox);
     check(`iPhone ${size}：目录树上工具条是 返回、根目录名、更多`, JSON.stringify(names) === '["exit","title","更多"]' && box.title === 'demo-project' && box.more && box.height >= 44, JSON.stringify({ names, box }));
@@ -1036,7 +1044,7 @@ try {
   await until(`${headName} === 'docs'`, '进入 docs');
   await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
   await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
-  await until(`${headName} === 'docs'`, '重新载入后回到 docs');
+  await until(`${headName} === 'docs' && ${gridNames}.includes('README.md')`, '重新载入后回到 docs，条目到了'); // 标题先于条目出现：要等条目
   check('图标视图：重新载入后回到保存的目录', (await evaluate(gridNames)).includes('README.md'), JSON.stringify((await evaluate(gridNames)).slice(0, 4)));
   await evaluate(`document.querySelector('#grid .ghead button').click()`);
   await until(`${headName} === 'demo-project'`, '往上一层');
@@ -1050,7 +1058,7 @@ try {
   await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
   await evaluate(`(() => { const key = 'harness-state:files', st = JSON.parse(sessionStorage.getItem(key)); for (const record of Object.values(st.sessions)) record.scroll.grid = 99999; sessionStorage.setItem(key, JSON.stringify(st)); })()`);
   await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
-  await until(`${headName} === 'docs'`, '重新载入后回到 docs');
+  await until(`${headName} === 'docs' && ${gridNames}.includes('README.md')`, '重新载入后回到 docs，条目到了'); // 标题先于条目出现：要等条目
   await frames();
   const clamped = await evaluate(`(() => { const b = ${bodyOf}; return { top: b.scrollTop, max: b.scrollHeight - b.clientHeight }; })()`);
   check('图标视图：恢复的位置大于内容时用能到的最大值（不越界）', clamped.top === clamped.max && clamped.top >= 0, JSON.stringify(clamped));
