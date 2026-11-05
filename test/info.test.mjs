@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
 import { dirSize, statPath } from '../lib/info.mjs';
+import { fromFsError } from '../lib/paths.mjs';
 import { createListing } from '../lib/tree.mjs';
 import { countingFs } from './support/countfs.mjs';
 import { checkoutOf, deferred, fakeCoda, flush, tempDir, trackTimers, waitFor } from './support/fake.mjs';
@@ -215,6 +216,74 @@ test('dir_size：统计排在别的任务后面，到 5 秒一项都没读 → i
   await Promise.all(held);
   await flush();
   assert.equal(spy.counts.lstat, 0, '排到名额的任务先核对停止条件，一次都没读');
+});
+
+// ---- dir_size：5 秒从收到请求算起，解析起点也在里面（假的解析函数，不碰真实时限）----
+
+// 解析起点由测试手里的 gate 控制；到点、取消、解析回来之后的核对都在这里验。
+function slowResolve() {
+  const gate = deferred(), calls = [];
+  return { calls, gate, resolve: async (root, path) => { calls.push(path); return gate.promise; } };
+}
+
+test('dir_size：解析起点还没回来就到 5 秒 → items: 0、complete: false；之后解析回来也不读', async t => {
+  const { root } = await repo(t);
+  const pending = trackTimers(t);
+  const spy = countingFs(), slow = slowResolve();
+  const answer = dirSize(listingOf(spy), root, 'sub', { resolve: slow.resolve });
+  await flush();
+  assert.equal(pending.size, 1, '收到请求就开始计时，不等解析');
+  t.mock.timers.tick(4999);
+  await flush();
+  assert.equal(pending.size, 1);
+  t.mock.timers.tick(1);
+  assert.deepEqual(await answer, { size: 0, items: 0, complete: false, unreadable: 0 });
+  slow.gate.resolve(join(root, 'sub'));
+  await flush();
+  assert.equal(spy.counts.readdir, 0, '解析回来时已经回答过，不再读');
+  assert.equal(spy.counts.lstat, 0);
+});
+
+test('dir_size：解析途中取消 → 不回答，解析回来也不读，计时和监听都撤掉', async t => {
+  const { root } = await repo(t);
+  const pending = trackTimers(t);
+  const spy = countingFs(), slow = slowResolve(), abort = new AbortController();
+  const answer = dirSize(listingOf(spy), root, 'sub', { resolve: slow.resolve, signal: abort.signal });
+  await flush();
+  abort.abort();
+  assert.equal(await answer, null);
+  assert.equal(pending.size, 0);
+  slow.gate.resolve(join(root, 'sub'));
+  await flush();
+  assert.equal(spy.counts.readdir, 0);
+  assert.equal(spy.counts.lstat, 0);
+});
+
+test('dir_size：解析回来时 valid() 已经为假 → 不回答，不读', async t => {
+  const { root } = await repo(t);
+  const pending = trackTimers(t);
+  const spy = countingFs(), slow = slowResolve();
+  let alive = true;
+  const answer = dirSize(listingOf(spy), root, 'sub', { resolve: slow.resolve, valid: () => alive });
+  await flush();
+  alive = false;
+  slow.gate.resolve(join(root, 'sub'));
+  assert.equal(await answer, null);
+  assert.equal(pending.size, 0);
+  assert.equal(spy.counts.readdir, 0);
+  assert.equal(spy.counts.lstat, 0);
+});
+
+test('dir_size：解析失败按错误回答；解析在时限内回来照常统计', async t => {
+  const { root } = await repo(t);
+  trackTimers(t);
+  const failing = dirSize(createListing(), root, 'sub', { resolve: async () => { throw fromFsError(Object.assign(new Error('x'), { code: 'ENOENT' })); } });
+  await assert.rejects(failing, error => error.code === 'not_found');
+  const slow = slowResolve();
+  const answer = dirSize(createListing(), root, 'sub', { resolve: slow.resolve });
+  await flush();
+  slow.gate.resolve(join(root, 'sub'));
+  assert.deepEqual(await answer, { size: 1100, items: 3, complete: true, unreadable: 0 });
 });
 
 // ---- dir_size：资源 ----

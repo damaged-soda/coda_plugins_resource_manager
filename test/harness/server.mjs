@@ -12,6 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activate } from '../../main.mjs';
+import { draftSession } from '../../lib/draft.mjs';
 
 const viewDir = fileURLToPath(new URL('../../view/', import.meta.url));
 const [dirA, dirB = dirA, port = '0'] = process.argv.slice(2);
@@ -24,9 +25,9 @@ const drafts = { A: { text: '', attachments: [], revision: 1 }, B: { text: '', a
 activate({
   views: { register: (id, provider) => providers.set(id, provider) },
   api: async (path, body) => {
-    const draft = /^threads\/([^/]+)\/draft$/.exec(path);
-    if (!draft) return threads[decodeURIComponent(path.replace(/^threads\//, ''))];
-    const current = drafts[decodeURIComponent(draft[1])];
+    const session = draftSession(path);
+    if (session === null) return threads[decodeURIComponent(path.replace(/^threads\//, ''))];
+    const current = drafts[session];
     if (body === undefined) return structuredClone(current);
     if (body.revision !== current.revision) return { draft: structuredClone(current), conflict: true };
     Object.assign(current, { text: body.text, revision: current.revision + 1 });

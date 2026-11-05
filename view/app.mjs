@@ -174,7 +174,7 @@ function changeSort(sort) {
 
 function act(id, button) {
   // 横屏时导航栏隐藏，属性页的原生返回看不到：这里的「返回」先关属性页，在根层才关视图。
-  if (id === EXIT.id) { if (infoOpen) closeInfo(); else quiet(() => coda.close()); }
+  if (id === EXIT.id) { if (infoOpen) { backPressed = true; closeInfo(); } else quiet(() => coda.close()); }
   else if (id === 'more') {
     // 键盘激活没有 pointerdown，菜单外点击那条规则不管用：同一个按钮再次激活就关闭。
     if (!menu.hidden && menu.opener === button) menu.hide();
@@ -268,6 +268,7 @@ function onSession(data) {
 
 function onRoot(data) {
   const before = model.root;
+  if (data.state !== before?.state || data.path !== before?.path) menu.hide(); // 开着的菜单里的路径是旧根目录下的
   if (data.state !== RootState.READY || before?.path !== data.path) closeInfo(); // 属性页看的是旧根目录下的路径
   const done = model.receive(data);
   if (done && data.state === RootState.READY) {
@@ -283,6 +284,7 @@ function onRoot(data) {
 
 function onChanged(data) {
   if (!model.receive(data)) return;
+  menu.hide(); // 开着的菜单可能指着已经删除的路径
   dataRound++;
   preview.refresh();
   info.refresh();

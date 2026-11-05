@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
+import { draftPath } from '../lib/draft.mjs';
 import { loadApp, visible } from './support/dom.mjs';
 import { checkoutOf, deferred, fakeCoda, flush, tempDir, waitFor } from './support/fake.mjs';
 import { rowNamed } from './support/treehost.mjs';
@@ -20,7 +21,7 @@ async function setup(t, { draft } = {}) {
   const gets = [], saves = [];
   const sessionApi = fake.coda.api;
   fake.coda.api = async (path, body) => {
-    if (path !== 'threads/A/draft') return sessionApi(path);
+    if (path !== draftPath('A')) return sessionApi(path);
     if (body === undefined) { gets.push(path); return structuredClone(draft); }
     saves.push(structuredClone(body));
     Object.assign(draft, { text: body.text, revision: draft.revision + 1 });
@@ -59,7 +60,7 @@ test('右键添加：页面右键 → add_text → 模块写草稿（带现有�
 test('右键添加：草稿接口不可用时回答 draft_failed，页面改成复制并提示', async t => {
   const { page, fake, copied, saves } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
   const api = fake.coda.api;
-  fake.coda.api = async (path, body) => { if (path === 'threads/A/draft') throw new Error('没有这个接口'); return api(path, body); };
+  fake.coda.api = async (path, body) => { if (path === draftPath('A')) throw new Error('没有这个接口'); return api(path, body); };
   rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
   choose(page, '添加到聊天');
   await waitFor(() => page.hint.textContent === '没能写入输入框，已复制', '失败提示');

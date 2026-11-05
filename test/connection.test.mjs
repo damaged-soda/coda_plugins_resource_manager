@@ -6,6 +6,7 @@ import { getEventListeners } from 'node:events';
 import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
+import { draftSession } from '../lib/draft.mjs';
 import { createListing } from '../lib/tree.mjs';
 import { Cancelled, RequestError, Stale, connect } from '../view/connection.mjs';
 import { MESSAGE_LIMIT, messageSize } from '../view/protocol.mjs';
@@ -209,7 +210,7 @@ test('connect 接真实模块：stat、dir_size、add_text 的往返；取消真
   const fake = fakeCoda({ A: checkoutOf(root) });
   const base_api = fake.coda.api;
   fake.coda.api = async (path, body) => {
-    if (!path.endsWith('/draft')) return base_api(path);
+    if (draftSession(path) === null) return base_api(path);
     if (!body) return { text: drafts.text, attachments: drafts.attachments, revision: drafts.revision };
     drafts.posts.push(body);
     drafts.text = body.text;

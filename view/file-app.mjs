@@ -103,6 +103,7 @@ function onSession(data) {
 
 function onRoot(data) {
   const before = root;
+  if (data.state !== before?.state || data.path !== before?.path) menu.hide(); // 选区和行号是旧内容上的
   root = { state: data.state, path: data.path };
   if (data.state === RootState.READY) {
     if (before?.path !== data.path) preview.reload(); else preview.refresh();
@@ -111,7 +112,9 @@ function onRoot(data) {
 }
 
 function onChanged() {
-  if (root?.state === RootState.READY) preview.refresh();
+  if (root?.state !== RootState.READY) return;
+  menu.hide(); // 内容可能变了，开着的选区菜单里的选区和行号作废
+  preview.refresh();
 }
 
 // ---- 参数变了：换文件或换会话，旧文件的滚动位置不带过去 ----

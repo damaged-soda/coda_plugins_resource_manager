@@ -1,15 +1,14 @@
 // add_text：lib/draft.mjs 直接测，加从 activate 入口走到（假的）coda.api 的整条链路。全部用假接口，不碰真实会话。
-// 草稿接口的路径只出现在 lib/draft.mjs 和这个文件里。
+// 草稿接口的路径只在 lib/draft.mjs 里写，测试和 harness 从那里取。
 import assert from 'node:assert/strict';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
-import { addText, compose } from '../lib/draft.mjs';
+import { addText, compose, draftSession } from '../lib/draft.mjs';
 import { DRAFT_LIMIT } from '../view/protocol.mjs';
 import { checkoutOf, deferred, fakeCoda, flush, tempDir, waitFor } from './support/fake.mjs';
 
-const DRAFT_PATH = /^threads\/([^/]+)\/draft$/;
 const caught = promise => promise.then(() => null, error => error);
 
 // 假的草稿接口：每个会话一份草稿，保存要带对版本。照服务端的规矩，正文只能有 text、attachments（ID 字符串）、revision。
@@ -19,7 +18,7 @@ function draftApi({ drafts, hooks = {} }) {
   return {
     log, drafts,
     async api(path, body) {
-      const session = decodeURIComponent(DRAFT_PATH.exec(path)[1]);
+      const session = draftSession(path);
       const current = drafts[session];
       if (body === undefined) {
         log.push({ method: 'GET', session });
@@ -187,7 +186,7 @@ async function repo(t) {
 function appFor(root, drafts, hooks, threads = { A: checkoutOf(root), B: checkoutOf(root) }) {
   const fake = fakeCoda(threads);
   const base = fake.coda.api, api = withDraft(drafts, hooks);
-  fake.coda.api = (path, body) => (DRAFT_PATH.test(path) ? api.api(path, body) : base(path));
+  fake.coda.api = (path, body) => (draftSession(path) !== null ? api.api(path, body) : base(path));
   activate(fake.coda);
   return { fake, draft: api };
 }
@@ -289,17 +288,18 @@ test('经 activate：旧代次的 add_text 不处理', async t => {
 
 // ---- 公开边界 ----
 
-test('草稿接口的路径只出现在 lib/draft.mjs 和它的测试里', async () => {
+test('草稿接口的路径只出现在 lib/draft.mjs，公开文件（含 test/）里都没有', async () => {
   const root = new URL('..', import.meta.url).pathname;
-  const files = [];
-  for (const dir of ['', 'lib', 'view']) {
-    for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
-      if (entry.isFile() && /\.(mjs|html|css|md)$/.test(entry.name)) files.push(join(dir, entry.name));
-    }
-  }
-  files.push('docs/backlog.md', '.coda/review.md');
   const hits = [];
-  const endpoint = /threads\/[^`'"\s]*\/draft/;
-  for (const file of files) if (endpoint.test(await readFile(join(root, file), 'utf8'))) hits.push(file);
+  const endpoint = /threads\/[^`'"\s]*\/draft/; // 比对前去掉反斜杠：转义写法的正则字面量也算
+  const scan = async dir => {
+    for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
+      const rel = dir === '' ? entry.name : `${dir}/${entry.name}`;
+      if (entry.isDirectory()) { if (!['.git', 'node_modules'].includes(entry.name)) await scan(rel); continue; }
+      if (!entry.isFile() || !/\.(mjs|js|html|css|md|json)$/.test(entry.name)) continue;
+      if (endpoint.test((await readFile(join(root, rel), 'utf8')).replaceAll('\\', ''))) hits.push(rel);
+    }
+  };
+  await scan('');
   assert.deepEqual(hits, ['lib/draft.mjs']);
 });

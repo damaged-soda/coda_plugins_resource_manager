@@ -148,6 +148,17 @@ test('iPhone 横屏：工具条的「返回」在属性页里关属性页，不�
   assert.equal(host.calls.close, 1, '在根层才关视图');
 });
 
+test('iPhone 横屏：「返回」关属性页后，焦点交给目录树（和页内返回、预览返回同一条路）', async t => {
+  const ctx = await start(t, { platform: 'ios' });
+  await openInfo(ctx, 'a.txt');
+  const exit = buttons(ctx.page.bar).find(node => node.classList.contains('exit'));
+  exit.focus();
+  exit.dispatch('click');
+  await flush();
+  assert.equal(visible(ctx.page.info), false);
+  assert.equal(globalThis.document.activeElement, ctx.page.tree);
+});
+
 test('iPhone 属性页：值的标签在上、值在下（样式由 CSS 管），内容同 Mac', async t => {
   const ctx = await start(t, { platform: 'ios' });
   ctx.host.answer(await openInfo(ctx, 'a.txt'), FILE);
