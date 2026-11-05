@@ -202,7 +202,7 @@ test('右键菜单（Mac）：路径下面一行 大小 · 完整修改时间；
   assert.equal(detail(page), '— · —');
   rowNamed(page, 'gone').dispatch('contextmenu', { clientX: 5, clientY: 6 });
   assert.equal(detail(page), undefined);
-  assert.deepEqual(items(page).map(node => node.textContent), ['复制相对路径', '复制绝对路径']);
+  assert.deepEqual(items(page).map(node => node.textContent), ['复制相对路径', '复制绝对路径', '属性']);
 });
 
 test('长按菜单（iPhone）：同样的信息行', async t => {

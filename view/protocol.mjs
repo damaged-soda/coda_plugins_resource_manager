@@ -11,11 +11,22 @@ export const IMAGE_LIMIT = 8 * 1024 * 1024;
 // 前这么多字节里有 NUL 就当二进制（照 Coda 判断二进制的惯例）。
 export const SNIFF_BYTES = 8000;
 export const REQUEST_ID_MAX = 64;
+// 输入框草稿的文字上限（UTF-16 单元）；拼完超过就不写。
+export const DRAFT_LIMIT = 100_000;
 
 export const Type = Object.freeze({
-  HELLO: 'hello', REFRESH: 'refresh', LIST: 'list', READ: 'read',
-  SESSION: 'session', ROOT: 'root', CHANGED: 'changed', LISTED: 'listed', CHUNK: 'chunk',
+  HELLO: 'hello', REFRESH: 'refresh', LIST: 'list', READ: 'read', STAT: 'stat', DIR_SIZE: 'dir_size', ADD_TEXT: 'add_text',
+  DIR_SIZE_CANCEL: 'dir_size_cancel', // 没有回答
+  SESSION: 'session', ROOT: 'root', CHANGED: 'changed',
+  LISTED: 'listed', CHUNK: 'chunk', STATTED: 'statted', SIZED: 'sized', ADDED: 'added',
 });
+
+// 请求 → 回答的类型。模块回答、页面分发都查这一张。
+export const ReplyOf = Object.freeze({
+  [Type.LIST]: Type.LISTED, [Type.READ]: Type.CHUNK, [Type.STAT]: Type.STATTED,
+  [Type.DIR_SIZE]: Type.SIZED, [Type.ADD_TEXT]: Type.ADDED,
+});
+export const isReply = type => Object.values(ReplyOf).includes(type);
 
 export const RootState = Object.freeze({ READY: 'ready', NONE: 'none', PREPARING: 'preparing', GONE: 'gone' });
 
@@ -23,6 +34,7 @@ export const ErrorCode = Object.freeze({
   NO_ROOT: 'no_root', INVALID_PATH: 'invalid_path', OUTSIDE_ROOT: 'outside_root', NOT_FOUND: 'not_found',
   NOT_DIR: 'not_dir', NOT_FILE: 'not_file', DENIED: 'denied', CURSOR_EXPIRED: 'cursor_expired',
   INVALID_OFFSET: 'invalid_offset', INVALID_SORT: 'invalid_sort', TOO_LARGE: 'too_large', IO: 'io_error',
+  DRAFT_FAILED: 'draft_failed', DRAFT_TOO_LONG: 'draft_too_long',
 });
 
 // 目录排序：值是下面四种之一，缺省（请求不带 sort）是名称。方向由排序键决定，只在 lib/tree.mjs 里定义一处。

@@ -4,12 +4,15 @@
 // 单独打开页面地址（/view/index.html?platform=ios）时，coda.open 跳到文件页、coda.close 返回，可直接用手机尺寸截图。
 // 文件视图：地址后加 ?view=file&session=A&path=相对路径，页面启动值同 coda.open({ view: 'file', args })。
 // 主题消息 { harness: 'theme', kind, fontSize? }：fontSize 缺省用平台默认值，页面底色随 --coda-background。
+// 原生返回：页面声明 coda.back(标题数组) 时记在 window.__backs 里并告诉控制页；控制页的「返回」按钮、或往页面发 { harness: 'back' }，触发 on('back', { steps: 1 })。
+// 地址加 ?back=0 模拟没有 coda.back 的旧客户端。写输入框的草稿存在内存里（每个会话一份，不碰任何真实会话）。
 // 控制页可切深浅色、切会话、触发一轮结束、重新载入页面。不是产品代码，不随插件使用。
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activate } from '../../main.mjs';
+import { draftSession } from '../../lib/draft.mjs';
 
 const viewDir = fileURLToPath(new URL('../../view/', import.meta.url));
 const [dirA, dirB = dirA, port = '0'] = process.argv.slice(2);
@@ -18,9 +21,18 @@ if (!dirA) { console.error('用法：node test/harness/server.mjs <目录A> [目
 // ---- 假的 coda 宿主（形状同 test/support/fake.mjs）----
 const threads = { A: { checkout: { kind: 'worktree', state: 'ready', path: dirA } }, B: { checkout: { kind: 'worktree', state: 'ready', path: dirB } } };
 const watchers = new Set(), views = new Set(), providers = new Map();
+const drafts = { A: { text: '', attachments: [], revision: 1 }, B: { text: '', attachments: [], revision: 1 } };
 activate({
   views: { register: (id, provider) => providers.set(id, provider) },
-  api: async path => threads[decodeURIComponent(path.replace(/^threads\//, ''))],
+  api: async (path, body) => {
+    const session = draftSession(path);
+    if (session === null) return threads[decodeURIComponent(path.replace(/^threads\//, ''))];
+    const current = drafts[session];
+    if (body === undefined) return structuredClone(current);
+    if (body.revision !== current.revision) return { draft: structuredClone(current), conflict: true };
+    Object.assign(current, { text: body.text, revision: current.revision + 1 });
+    return { draft: structuredClone(current) };
+  },
   watch: async (_name, fn) => { watchers.add(fn); return { dispose: () => watchers.delete(fn) }; },
 });
 const emit = (id, turn) => { for (const fn of watchers) fn({ type: 'MODIFIED', id, object: { id, turn } }); };
@@ -62,6 +74,7 @@ window.coda = { platform: query.get('platform') || 'mac', plugin: 'resource-mana
   getState: () => JSON.parse(sessionStorage.getItem(key) || 'null'),
   setState: value => { const text = JSON.stringify(value); if (text.length > 128 * 1024) throw new Error('状态超过 128 KiB'); sessionStorage.setItem(key, text); },
   copy: text => parent.postMessage({ harness: 'copy', text }, '*'),
+  ...(query.get('back') === '0' ? {} : { back: titles => { (window.__backs ||= []).push(titles); parent.postMessage({ harness: 'back-declared', titles }, '*'); } }),
   toolbar: items => parent.postMessage({ harness: 'toolbar', items }, '*'),
   on: (name, fn) => { (listeners[name] ||= []).push(fn); },
   close: () => { if (parent === window) history.back(); else parent.postMessage({ harness: 'close' }, '*'); },
@@ -71,13 +84,13 @@ const connection = Math.random().toString(36).slice(2);
 const events = new EventSource('/events?id=' + connection + '&view=' + (isFile ? 'file' : 'files') + '&args=' + encodeURIComponent(JSON.stringify(startArgs))), opened = new Promise(resolve => events.addEventListener('open', resolve));
 const loaded = new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve));
 applyTheme(new URLSearchParams(location.search).get('theme') || 'light');
-addEventListener('message', event => { if (event.data?.harness === 'toolbar') fire('toolbar', { id: event.data.id }); if (event.data?.harness === 'theme') applyTheme(event.data.kind, event.data.fontSize); });
+addEventListener('message', event => { if (event.data?.harness === 'back') fire('back', { steps: 1 }); if (event.data?.harness === 'toolbar') fire('toolbar', { id: event.data.id }); if (event.data?.harness === 'theme') applyTheme(event.data.kind, event.data.fontSize); });
 addEventListener('pagehide', () => fire('visibility', false));
 events.addEventListener('msg', event => loaded.then(() => window.dispatchEvent(new MessageEvent('message', { data: JSON.parse(event.data) }))));`;
 
 const control = src => `<!doctype html><meta charset=utf-8><title>harness</title>
 <body style="font:13px system-ui;display:flex;gap:16px;margin:12px"><iframe id=f src="${src}" style="width:320px;height:789px;border:1px solid #888"></iframe>
-<div><p id=bar></p><p>
+<div><p id=bar></p><p id=back></p><p>
 ${['theme:light', 'theme:dark', 'session:A', 'session:B', 'turn:end', 'reload'].map(a => `<button onclick="ctl('${a}')">${a}</button>`).join(' ')}</p><pre id=log></pre></div>
 <script>
 const params = new URLSearchParams(location.search);
@@ -88,6 +101,8 @@ async function ctl(a) { if (a.startsWith('theme:')) { theme = a.slice(6); f.cont
   else if (a === 'reload') f.src = base + '?' + new URLSearchParams({ ...Object.fromEntries(params), theme, t: Date.now() }); else await fetch('/ctl?action=' + a + (fileSession ? '&session=' + fileSession : '')); }
 addEventListener('message', e => { if (e.data?.harness === 'copy') log('copy: ' + e.data.text);
   if (e.data?.harness === 'open') log('open: ' + JSON.stringify(e.data.target)); if (e.data?.harness === 'close') log('close');
+  if (e.data?.harness === 'back-declared') document.getElementById('back').replaceChildren(...(e.data.titles.length ? [Object.assign(document.createElement('button'), { textContent: '← ' + e.data.titles.at(-1),
+    onclick: () => f.contentWindow.postMessage({ harness: 'back' }, '*') })] : []));
   if (e.data?.harness === 'toolbar') document.getElementById('bar').replaceChildren(...e.data.items.map(i => Object.assign(document.createElement('button'), { textContent: i.label + (i.on ? ' ✓' : ''),
     onclick: () => f.contentWindow.postMessage({ harness: 'toolbar', id: i.id }, '*') }))); });
 </script>`;

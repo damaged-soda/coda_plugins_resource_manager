@@ -2,9 +2,11 @@
 // 协议见 docs/design/phase-1.md 第 6 节，消息格式见 view/protocol.mjs。
 import { createListing, listDirectory } from './lib/tree.mjs';
 import { readChunk } from './lib/content.mjs';
+import { addText } from './lib/draft.mjs';
+import { dirSize, statPath } from './lib/info.mjs';
 import { NO_ROOT, queryRoot, sameRoot } from './lib/root.mjs';
 import {
-  ErrorCode, MESSAGE_LIMIT, REQUEST_ID_MAX, RootState, Type, fail, messageSize,
+  ErrorCode, MESSAGE_LIMIT, REQUEST_ID_MAX, ReplyOf, RootState, Type, fail, messageSize,
 } from './view/protocol.mjs';
 
 const POLL_MS = 2000;
@@ -17,16 +19,17 @@ const sessionOfFile = context => {
   return typeof session === 'string' && session !== '' ? session : null;
 };
 
-// options.makeListing 只给测试用：换成带假文件系统的读取状态，运行时不传。
-export function activate(coda, { makeListing = createListing } = {}) {
-  coda.views.register('files', { open: view => serve(coda, view, sessionOfTree, makeListing) });
-  coda.views.register('file', { open: view => serve(coda, view, sessionOfFile, makeListing) });
+// options 只给测试用，运行时不传：makeListing 换成带假文件系统的读取状态；sizeLimits 调文件夹大小的项数、用时上限。
+export function activate(coda, { makeListing = createListing, sizeLimits = {} } = {}) {
+  const options = { makeListing, sizeLimits };
+  coda.views.register('files', { open: view => serve(coda, view, sessionOfTree, options) });
+  coda.views.register('file', { open: view => serve(coda, view, sessionOfFile, options) });
 }
 
 const validRequestId = id => (typeof id === 'string' && id.length <= REQUEST_ID_MAX) || Number.isSafeInteger(id);
 const errorOf = error => (error?.protocol ? { code: error.code, message: error.message } : { code: ErrorCode.IO, message: '读取失败' });
 
-function serve(coda, view, sessionOf, makeListing) {
+function serve(coda, view, sessionOf, { makeListing, sizeLimits }) {
   // 代次：每换一次会话加 1，所有异步出口回来后都要核对。
   const s = {
     session: sessionOf(view.context), generation: 1, root: NO_ROOT, sent: null,
@@ -35,6 +38,12 @@ function serve(coda, view, sessionOf, makeListing) {
   };
   const turns = new Map();
   const stale = generation => s.closed || generation !== s.generation;
+
+  // 文件夹大小：每个视图同时只有一次统计。新的开始、换会话、根目录变化、视图关闭时旧的静默停止（不回答）。
+  let sizing = null; // { generation, requestId, abort }
+  const stopSizing = () => { sizing?.abort.abort(); sizing = null; };
+  // 换会话、根目录变化、视图关闭：读取状态丢弃，统计也停。
+  const resetReads = () => { s.listing.clear(); stopSizing(); };
 
   function post(message) {
     if (s.closed) return;
@@ -61,7 +70,7 @@ function serve(coda, view, sessionOf, makeListing) {
     try { next = await queryRoot(coda, s.session); } catch { /* 保留上一次 */ }
     if (stale(generation) || seq !== s.rootSeq) return;
     if (next) {
-      if (next.path !== s.root.path) s.listing.clear();
+      if (next.path !== s.root.path) resetReads();
       s.root = next;
     }
     syncPoll();
@@ -86,30 +95,55 @@ function serve(coda, view, sessionOf, makeListing) {
     stopPoll();
     s.session = session ?? null;
     s.generation++;
-    s.listing.clear();
+    resetReads();
     s.root = NO_ROOT;
     s.sent = null;
     if (s.hello) postSession();
     refreshRoot();
   }
 
+  // 各种请求的处理：返回回答的内容；返回 null 表示静默结束，不回答。
+  const handlers = {
+    [Type.LIST]: (message, { root, valid }) => listDirectory(root, message.path, message.cursor, { listing: s.listing, sort: message.sort, valid }),
+    [Type.READ]: (message, { root }) => readChunk(root, message.path, message.offset),
+    [Type.STAT]: (message, { root }) => statPath(s.listing, root, message.path),
+    async [Type.DIR_SIZE](message, { root, valid, generation, requestId }) {
+      stopSizing();
+      const mine = { generation, requestId, abort: new AbortController() };
+      sizing = mine;
+      try {
+        return await dirSize(s.listing, root, message.path, { ...sizeLimits, valid, signal: mine.abort.signal });
+      } finally { if (sizing === mine) sizing = null; }
+    },
+    async [Type.ADD_TEXT](message, { generation }) {
+      if (!s.session) throw fail(ErrorCode.NO_ROOT, '没有会话');
+      return await addText(coda, s.session, message, { valid: () => !stale(generation) }) ? {} : null;
+    },
+  };
+  // 回答依赖根目录的：读完回来根目录换了，不能带旧根目录的内容。
+  const rootBound = new Set([Type.LIST, Type.STAT]);
+
   async function request(message) {
     const { type, generation, requestId } = message;
     if (stale(generation) || !validRequestId(requestId)) return;
-    const reply = type === Type.LIST ? Type.LISTED : Type.CHUNK;
+    const reply = ReplyOf[type];
     try {
       if (s.root.state !== RootState.READY) throw fail(ErrorCode.NO_ROOT, '没有可浏览的工作目录');
       const root = s.root.path;
       // 读的途中根目录换了（同一会话从 A 换到 B），回答不能带 A 的内容。
       const valid = () => !stale(generation) && s.root.state === RootState.READY && s.root.path === root;
-      const body = type === Type.LIST
-        ? await listDirectory(root, message.path, message.cursor, { listing: s.listing, sort: message.sort, valid })
-        : await readChunk(root, message.path, message.offset);
-      if (type === Type.LIST && !valid() && !stale(generation)) throw fail(ErrorCode.NO_ROOT, '工作目录已变化');
+      const body = await handlers[type](message, { root, valid, generation, requestId });
+      if (body === null || (type === Type.DIR_SIZE && !valid())) return; // 统计完成时根目录已变：不回答
+      if (rootBound.has(type) && !valid() && !stale(generation)) throw fail(ErrorCode.NO_ROOT, '工作目录已变化');
       if (!stale(generation)) post({ type: reply, generation, requestId, ...body });
     } catch (error) {
       if (!stale(generation)) post({ type: reply, generation, requestId, error: errorOf(error) });
     }
+  }
+
+  // 取消统计：代次和请求号都对上才停，迟到的取消不会误伤新的统计。
+  function cancelSizing({ generation, requestId }) {
+    if (!stale(generation) && sizing?.generation === generation && sizing.requestId === requestId) stopSizing();
   }
 
   view.onMessage(async message => {
@@ -121,7 +155,8 @@ function serve(coda, view, sessionOf, makeListing) {
         if (stale(message.generation)) return undefined;
         s.listing.detach();
         return refreshRoot();
-      case Type.LIST: case Type.READ: return request(message);
+      case Type.LIST: case Type.READ: case Type.STAT: case Type.DIR_SIZE: case Type.ADD_TEXT: return request(message);
+      case Type.DIR_SIZE_CANCEL: return cancelSizing(message);
     }
   });
 
@@ -148,7 +183,7 @@ function serve(coda, view, sessionOf, makeListing) {
 
   view.onClose(async () => {
     s.closed = true;
-    s.listing.clear();
+    resetReads();
     stopPoll();
     try { await (await watching)?.dispose(); } catch { /* 已经取消 */ }
   });

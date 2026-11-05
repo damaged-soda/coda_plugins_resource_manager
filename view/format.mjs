@@ -38,3 +38,30 @@ export const infoText = entry => joined([sizeText(entry), Number.isInteger(entry
 
 const NAMES = { [SortKey.NAME]: '名称', [SortKey.KIND]: '种类', [SortKey.DATE]: '日期', [SortKey.SIZE]: '大小' };
 export const sortName = key => NAMES[key];
+
+// ---- 属性页 ----
+// 千分位：1204 → 1,204。
+export const thousands = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+// 项数：整万的写成 20 万项，别的千分位 1,204 项。
+export const countText = n => (n >= 10000 && n % 10000 === 0 ? `${n / 10000} 万项` : `${thousands(n)} 项`);
+// 文件大小：2.5 KiB（2,560 字节）；不到 1 KiB 只写字节数。
+export const fileSizeText = bytes => (bytes < 1024 ? `${bytes} 字节` : `${formatSize(bytes)}（${thousands(bytes)} 字节）`);
+
+// 文件夹大小，{ size, items, complete, unreadable } 是 dir_size 的回答。
+// 统计完：3.2 GiB（1,204 项）；有读不到的：至少 3.2 GiB（3 项读不到）；没统计完：超过 3.2 GiB（已统计 20 万项）；
+// 一项都没读到就到时间（目录正忙）：不写「超过 0 B」。
+export function dirSizeText({ size, items, complete, unreadable = 0 }) {
+  if (!complete && items === 0) return '目录正忙，没统计完';
+  const bytes = formatSize(size);
+  if (!complete) return `超过 ${bytes}（${[`已统计 ${countText(items)}`, unreadable > 0 ? `${unreadable} 项读不到` : ''].filter(Boolean).join('，')}）`;
+  return unreadable > 0 ? `至少 ${bytes}（${unreadable} 项读不到）` : `${bytes}（${countText(items)}）`;
+}
+
+// 权限：rw-r--r--；setuid、setgid、sticky 照 ls 的写法。
+export function modeText(mode) {
+  const chars = Array.from('rwxrwxrwx', (char, i) => (mode & (0o400 >> i) ? char : '-'));
+  for (const [bit, at, on] of [[0o4000, 2, 's'], [0o2000, 5, 's'], [0o1000, 8, 't']]) {
+    if (mode & bit) chars[at] = chars[at] === 'x' ? on : on.toUpperCase();
+  }
+  return chars.join('');
+}

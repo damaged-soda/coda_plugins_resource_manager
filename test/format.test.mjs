@@ -1,7 +1,7 @@
 // view/format.mjs：大小、相对日期、完整日期、排序名称。日期都用本地时间构造，和时区、语言设置无关。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateText, formatDate, formatFullDate, formatSize, infoText, sizeText, sortName, subText } from '../view/format.mjs';
+import { countText, dateText, dirSizeText, fileSizeText, formatDate, formatFullDate, formatSize, infoText, modeText, sizeText, sortName, subText, thousands } from '../view/format.mjs';
 
 const at = (...parts) => new Date(...parts).getTime();
 
@@ -47,4 +47,33 @@ test('大小、日期、信息行：读不到的部分是 —，文件夹没有�
 
 test('sortName：四种排序的菜单文字', () => {
   assert.deepEqual(['name', 'kind', 'date', 'size'].map(sortName), ['名称', '种类', '日期', '大小']);
+});
+
+test('thousands、countText：千分位；整万的项数写成 N 万项', () => {
+  assert.deepEqual([0, 999, 1000, 1204, 1234567].map(thousands), ['0', '999', '1,000', '1,204', '1,234,567']);
+  assert.deepEqual([0, 1, 1204, 9999, 10000, 45123, 200000, 210000].map(countText), ['0 项', '1 项', '1,204 项', '9,999 项', '1 万项', '45,123 项', '20 万项', '21 万项']);
+});
+
+test('fileSizeText：2.5 KiB（2,560 字节）；不到 1 KiB 只写字节数', () => {
+  assert.equal(fileSizeText(2560), '2.5 KiB（2,560 字节）');
+  assert.equal(fileSizeText(1024), '1.0 KiB（1,024 字节）');
+  assert.equal(fileSizeText(1023), '1023 字节');
+  assert.equal(fileSizeText(0), '0 字节');
+  assert.equal(fileSizeText(3 * 1024 ** 3), '3.0 GiB（3,221,225,472 字节）');
+});
+
+test('dirSizeText：完整、读不到、没统计完、目录正忙', () => {
+  const GiB = 1024 ** 3;
+  assert.equal(dirSizeText({ size: 3.2 * GiB, items: 1204, complete: true, unreadable: 0 }), '3.2 GiB（1,204 项）');
+  assert.equal(dirSizeText({ size: 0, items: 0, complete: true, unreadable: 0 }), '0 B（0 项）');
+  assert.equal(dirSizeText({ size: 3.2 * GiB, items: 1204, complete: true, unreadable: 3 }), '至少 3.2 GiB（3 项读不到）');
+  assert.equal(dirSizeText({ size: 3.2 * GiB, items: 200000, complete: false, unreadable: 0 }), '超过 3.2 GiB（已统计 20 万项）');
+  assert.equal(dirSizeText({ size: 3.2 * GiB, items: 3000, complete: false, unreadable: 2 }), '超过 3.2 GiB（已统计 3,000 项，2 项读不到）');
+  assert.equal(dirSizeText({ size: 0, items: 0, complete: false, unreadable: 0 }), '目录正忙，没统计完', '一项都没读到：不写「超过 0 B」');
+  assert.equal(dirSizeText({ size: 0, items: 5, complete: false }), '超过 0 B（已统计 5 项）', '读到了项但都是空文件：照常写');
+});
+
+test('modeText：rwx 九位，setuid、setgid、sticky 照 ls', () => {
+  assert.deepEqual([0o644, 0o755, 0o600, 0o777, 0o000].map(modeText), ['rw-r--r--', 'rwxr-xr-x', 'rw-------', 'rwxrwxrwx', '---------']);
+  assert.deepEqual([0o4755, 0o4644, 0o2755, 0o2645, 0o1777, 0o1776].map(modeText), ['rwsr-xr-x', 'rwSr--r--', 'rwxr-sr-x', 'rw-r-Sr-x', 'rwxrwxrwt', 'rwxrwxrwT']);
 });

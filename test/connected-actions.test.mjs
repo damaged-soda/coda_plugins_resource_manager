@@ -1,0 +1,110 @@
+// 真实链路：真实的 app.mjs 页面 + 真实的 connect() + 真实的 activate 模块 + 真实的临时目录，只有 coda.api（草稿接口和会话查询）是假的。
+// 「右键添加」从页面的右键一路走到假 coda.api 的保存；「属性」从页面一路走到真实的 stat 和 dir_size。
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import test from 'node:test';
+import { activate } from '../main.mjs';
+import { draftPath } from '../lib/draft.mjs';
+import { loadApp, visible } from './support/dom.mjs';
+import { checkoutOf, deferred, fakeCoda, flush, tempDir, waitFor } from './support/fake.mjs';
+import { rowNamed } from './support/treehost.mjs';
+
+async function setup(t, { draft } = {}) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const base = await tempDir(t), root = join(base, 'repo');
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'a.txt'), 'hello');
+  await writeFile(join(root, 'src', 'x.js'), 'x'.repeat(100));
+  await writeFile(join(root, 'src', 'y.js'), 'y'.repeat(50));
+  const fake = fakeCoda({ A: checkoutOf(root) });
+  const gets = [], saves = [];
+  const sessionApi = fake.coda.api;
+  fake.coda.api = async (path, body) => {
+    if (path !== draftPath('A')) return sessionApi(path);
+    if (body === undefined) { gets.push(path); return structuredClone(draft); }
+    saves.push(structuredClone(body));
+    Object.assign(draft, { text: body.text, revision: draft.revision + 1 });
+    return { draft: structuredClone(draft) };
+  };
+  activate(fake.coda);
+  const view = fake.open('A');
+  const loaded = deferred();
+  view.listen(message => loaded.promise.then(() => queueMicrotask(() => page.post(message))));
+  const copied = [], backs = [], events = {};
+  const page = await loadApp(t, {
+    platform: 'mac', postMessage: message => view.send(message), on: (name, fn) => { events[name] = fn; }, back: titles => backs.push(titles),
+    copy: text => copied.push(text), getState: () => undefined, setState: () => {}, open: () => {}, close: () => {},
+  });
+  loaded.resolve();
+  await waitFor(() => rowNamed(page, 'a.txt'), '目录树出现');
+  return { base, root, fake, view, page, copied, backs, events, gets, saves, draft };
+}
+const buttons = page => page.menu.find(node => node.tagName === 'BUTTON');
+const choose = (page, label) => buttons(page).find(node => node.textContent === label).dispatch('click');
+
+test('右键添加：页面右键 → add_text → 模块写草稿（带现有附件）→ 回答 → 提示「已添加到输入框」', async t => {
+  const { page, saves, gets, draft, copied } = await setup(t, { draft: { text: '看看', attachments: [{ id: 'f1' }], revision: 3 } });
+  rowNamed(page, 'a.txt').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  assert.deepEqual(buttons(page).map(node => node.textContent), ['添加到聊天', '复制相对路径', '复制绝对路径', '属性']);
+  choose(page, '添加到聊天');
+  await waitFor(() => page.hint.textContent === '已添加到输入框', '成功提示');
+  assert.equal(gets.length, 1);
+  assert.deepEqual(saves, [{ text: '看看 a.txt ', attachments: ['f1'], revision: 3 }]);
+  assert.equal(draft.text, '看看 a.txt ');
+  assert.deepEqual(copied, [], '成功不复制');
+  assert.ok(visible(page.hint));
+  assert.equal(page.hint.classList.contains('warn'), false);
+});
+
+test('右键添加：草稿接口不可用时回答 draft_failed，页面改成复制并提示', async t => {
+  const { page, fake, copied, saves } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
+  const api = fake.coda.api;
+  fake.coda.api = async (path, body) => { if (path === draftPath('A')) throw new Error('没有这个接口'); return api(path, body); };
+  rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  choose(page, '添加到聊天');
+  await waitFor(() => page.hint.textContent === '没能写入输入框，已复制', '失败提示');
+  assert.deepEqual(copied, ['src']);
+  assert.equal(saves.length, 0);
+  assert.ok(page.hint.classList.contains('warn'));
+});
+
+test('右键添加：保存的回答不带 draft（接口形状异常）时页面改成复制，不提示已添加', async t => {
+  const { page, fake, copied, saves } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
+  const api = fake.coda.api;
+  fake.coda.api = async (path, body) => (path === draftPath('A') && body !== undefined ? (saves.push(body), undefined) : api(path, body));
+  rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  choose(page, '添加到聊天');
+  await waitFor(() => page.hint.textContent === '没能写入输入框，已复制', '失败提示');
+  assert.equal(saves.length, 1, '保存过一次，没重试');
+  assert.deepEqual(copied, ['src']);
+  assert.notEqual(page.hint.textContent, '已添加到输入框');
+  assert.ok(page.hint.classList.contains('warn'));
+});
+
+test('属性：文件和文件夹经真实模块；文件夹的大小是子项之和，项数含子目录', async t => {
+  const { page, backs } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
+  const rows = () => Object.fromEntries(page.info.find(node => node.classList.contains('irow')).map(row => [row.children[0].textContent, row.children[1].textContent]));
+
+  rowNamed(page, 'a.txt').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  choose(page, '属性');
+  await waitFor(() => rows().种类 === '文本', '文件属性');
+  assert.equal(rows().大小, '5 字节');
+  assert.match(rows().完整路径, /\/repo\/a\.txt$/);
+  assert.deepEqual(backs, [], 'Mac 有 coda.back 也不调用');
+
+  assert.equal(page.info.find(node => node.tagName === 'BUTTON').filter(node => node.getAttribute('aria-label') === '返回').length, 1, 'Mac：头部有返回按钮');
+  assert.equal(page.info.find(node => node.tagName === 'BUTTON').length, 1, '文件没有重新统计');
+});
+
+test('属性：文件夹经真实的 dir_size 统计', async t => {
+  const { page, events } = await setup(t, { draft: { text: '', attachments: [], revision: 1 } });
+  const rows = () => Object.fromEntries(page.info.find(node => node.classList.contains('irow')).map(row => [row.children[0].textContent, row.children[1].textContent]));
+  rowNamed(page, 'src').dispatch('contextmenu', { clientX: 5, clientY: 6 });
+  choose(page, '属性');
+  await waitFor(() => rows().大小 === '150 B（2 项）', '文件夹大小');
+  assert.equal(rows().种类, '文件夹');
+  page.info.find(node => node.tagName === 'BUTTON').find(node => node.getAttribute('aria-label') === '返回').dispatch('click');
+  await flush();
+  assert.equal(visible(page.info), false);
+});
