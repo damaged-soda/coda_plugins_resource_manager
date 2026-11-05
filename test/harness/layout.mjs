@@ -23,7 +23,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // 先建临时目录，之后所有资源都在 try/finally 里创建，失败时一并清理。
 const base = await mkdtemp(join(tmpdir(), 'rm-ui-'));
-const fixture = join(base, 'demo-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
+const fixture = join(base, 'demo-project'), bulkRoot = join(base, 'bulk-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
+const BULK = 20000; // 图标视图的量：一个目录里这么多文件，在会话 B 里（根目录是 bulk-project）
 const children = [];
 let serverUrl, ws, keepShots = false;
 
@@ -53,7 +54,7 @@ const cleanup = async () => {
   await Promise.all(children.map(stop));
   await chmod(join(fixture, 'locked'), 0o755).catch(() => {});
   // 跑完了截图才留下，中途失败时整个临时目录都删掉。
-  for (const dir of keepShots ? [fixture, profile] : [base]) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const dir of keepShots ? [fixture, bulkRoot, profile] : [base]) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 };
 
 let id = 0; const waiting = new Map();
@@ -65,7 +66,7 @@ const until = async (expr, what) => {
   const deadline = Date.now() + UNTIL_MS;
   for (;;) {
     if (await evaluate(expr)) return;
-    if (Date.now() >= deadline) throw new Error(`等不到：${what}（等了 ${UNTIL_MS / 1000} 秒）`);
+    if (Date.now() >= deadline) throw new Error(`等不到：${what}（等了 ${UNTIL_MS / 1000} 秒）；页面现在：${JSON.stringify(await evaluate(`document.body.innerText.slice(0, 200)`).catch(() => null))}`);
     await wait(50);
   }
 };
@@ -90,7 +91,7 @@ async function start() {
   await symlink('/nonexistent-target', join(fixture, 'dangling'));
   await chmod(join(fixture, 'locked'), 0);
 
-  const server = launch('harness 服务', process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, fixture, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const server = launch('harness 服务', process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, bulkRoot, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
   serverUrl = await within(Promise.race([server.early, new Promise(resolve => server.stdout.on('data', data => { const m = /http:\/\/\S+/.exec(String(data)); if (m) resolve(m[0]); }))]), STARTUP_MS, 'harness 服务启动');
 
   // 端口上已经有调试服务时，连上的会是别人的 Chrome，不是我们起的这个。
@@ -118,7 +119,8 @@ const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__r
 const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
-async function open(size, platform, theme, { keep = false, state = null, extra = '' } = {}) {
+// ready：载入后要等到出现的元素，列表是 .row.entry，图标视图是 .gi。
+async function open(size, platform, theme, { keep = false, state = null, extra = '', ready = '.row.entry' } = {}) {
   const [w, h, safe] = SIZES[size];
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
   const stamp = Date.now(), url = `${serverUrl}view/index.html?platform=${platform}&theme=${theme}&safe=${safe}&t=${stamp}${extra}`;
@@ -132,7 +134,7 @@ async function open(size, platform, theme, { keep = false, state = null, extra =
   await send('Page.navigate', { url });
   // navigate 返回时新页还没接手：只查行会被上一页（它的行还在）骗过去，要先等地址里的时间戳是新页的。
   await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入');
-  await until(`document.querySelectorAll('.row.entry').length > 0`, '目录树出现');
+  await until(`document.querySelectorAll('${ready}').length > 0`, '目录树出现');
   await evaluate(trackRequests);
 }
 // 文件页：query 是额外的参数；等正文或说明区出现。
@@ -824,6 +826,174 @@ try {
       await shoot(`ios-${size}-${theme}-file`);
     }
   }
+
+  // ================= 图标视图（0.6.0 第 1 步：用测试入口验证，没有用户入口）=================
+  // 起点：保存的状态里 view 是 icons（页面真实的恢复路径）；运行中切换用页面入口模块的导出 changeView（和页面里的脚本是同一个模块实例）。
+  const ICONS = { v: 1, seq: 1, hidden: false, view: 'icons', sessions: {} };
+  const openGrid = (size, platform, theme, extra = {}) => open(size, platform, theme, { state: ICONS, ready: '#grid .cell', ...extra });
+  const switchView = view => evaluate(`import('/view/app.mjs').then(app => { app.changeView('${view}'); })`);
+  const bodyOf = `document.querySelector('#grid .gbody')`;
+  // 画出来的单元格：宽高、第一行有几个、都在容器横向范围里；列数应是 floor(容器宽 / 单元格宽)。
+  const gridBox = `(() => { const body = ${bodyOf}, cells = [...document.querySelectorAll('#grid .cell')], box = body.getBoundingClientRect(), first = cells[0].getBoundingClientRect();
+    const row0 = cells.filter(c => Math.abs(c.getBoundingClientRect().top - first.top) < 1);
+    return { clientWidth: body.clientWidth, cellW: first.width, cellH: first.height, perRow: row0.length, cols: Math.floor(body.clientWidth / first.width), n: cells.length,
+      inside: cells.every(c => { const r = c.getBoundingClientRect(); return r.left >= box.left - 0.5 && r.right <= box.right + 0.5; }) }; })()`;
+  // 视口里每隔一段取一个点：每一点都该落在某一行单元格或说明项的纵向范围里（没有就是空白，虚拟滚动画少了）。
+  // 内容上下各有 8 点的留白（.gspacer 的外边距），那一段不算内容，不查。
+  const gridCovered = `(() => { const box = ${bodyOf}.getBoundingClientRect(), sp = document.querySelector('#grid .gspacer').getBoundingClientRect(), items = [...document.querySelectorAll('#grid .gi')].map(c => c.getBoundingClientRect()), miss = [];
+    for (let y = Math.max(box.top, sp.top) + 4; y < Math.min(box.bottom, sp.bottom) - 4; y += 8) if (!items.some(r => r.top <= y && y < r.bottom)) miss.push(Math.round(y));
+    return miss; })()`;
+  // 单元格的名字不含图标里的字母（语言类图标是两个字母）：取 .gname；说明项取整段文字。
+  const gridNames = `[...document.querySelectorAll('#grid .gi')].map(c => c.querySelector('.gname')?.textContent ?? c.textContent)`;
+  const clickCell = name => evaluate(`[...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === ${JSON.stringify(name)}).click()`);
+  const gridScroll = () => evaluate(`${bodyOf}.scrollTop`);
+  const setGridScroll = top => evaluate(`(() => { const b = ${bodyOf}; b.scrollTop = ${top}; b.dispatchEvent(new Event('scroll')); return b.scrollTop; })()`);
+  const headName = `document.querySelector('#grid .gname-head')?.textContent`;
+
+  // 两端、两种外观：单元格的尺寸、列数、不超出容器；文件夹是强调色；长名字折两行并截断，单元格高度不变。
+  const GRID_SIZES = [['mac', 'mac', 72], ['narrow', 'mac', 72], ['portrait', 'ios', 88], ['landscape', 'ios', 88]];
+  for (const theme of ['light', 'dark']) {
+    for (const [size, platform, cellW] of GRID_SIZES) {
+      await openGrid(size, platform, theme);
+      const g = await evaluate(gridBox);
+      const label = `图标视图 ${size} ${theme}`;
+      check(`${label}：单元格宽 ${cellW} 点，列数 = floor(容器宽 / ${cellW})，第一行就是这么多个，都在容器里`, g.cellW === cellW && g.perRow === g.cols && g.cols >= 1 && g.inside, JSON.stringify(g));
+      const heights = await evaluate(`(() => { const hs = [...document.querySelectorAll('#grid .cell')].map(c => c.getBoundingClientRect().height); return { min: Math.min(...hs), max: Math.max(...hs), probe: parseFloat(document.querySelector('#grid .gspacer').style.height) / Math.ceil(${ROOT_ROWS} / ${g.cols}) }; })()`);
+      check(`${label}：单元格高度固定，spacer 的高度 = 行数 × 探针量到的高度`, heights.max - heights.min < 0.01 && Math.abs(heights.probe - heights.min) < 0.01, JSON.stringify(heights));
+      const longName = await evaluate(`(() => { const cell = [...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === '${LONG_NAME}'); if (!cell) return null;
+        const name = cell.querySelector('.gname'), n = name.getBoundingClientRect(), c = cell.getBoundingClientRect(), line = parseFloat(getComputedStyle(name).lineHeight);
+        return { lines: Math.round(n.height / line), clipped: name.scrollHeight > name.clientHeight, fits: n.bottom <= c.bottom + 0.5, cellH: c.height }; })()`);
+      // 长名字排在第二页之后的位置：取不到就滚过去再取。
+      if (longName) check(`${label}：长名字折成两行再截断，不撑高单元格`, longName.lines === 2 && longName.clipped && longName.fits, JSON.stringify(longName));
+      check(`${label}：文件夹的图标是强调色，不能打开的条目不上彩色`, await evaluate(`(() => { const dir = getComputedStyle(document.querySelector('#grid .cell.dir .gico')).color, probe = document.createElement('i'); probe.style.color = 'var(--coda-accent)'; document.body.append(probe);
+        const accent = getComputedStyle(probe).color; probe.remove(); const dead = document.querySelector('#grid .cell.dead'); return dir === accent && (!dead || getComputedStyle(dead.querySelector('.gico')).color !== accent); })()`));
+      check(`${label}：目录树面板不可见，网格面板可见`, await evaluate(`getComputedStyle(document.getElementById('tree')).visibility === 'hidden' && getComputedStyle(document.getElementById('grid')).visibility === 'visible'`));
+      if (platform === 'mac') check(`${label}：头部是根目录名，没有返回键`, (await evaluate(headName)) === 'demo-project' && (await evaluate(`document.querySelectorAll('#grid .ghead button').length`)) === 0);
+      else check(`${label}：没有页内头部（原生返回），工具条标题是根目录名`, (await evaluate(`getComputedStyle(document.querySelector('#grid .ghead')).display`)) === 'none' && (await evaluate(`document.querySelector('.bar-title')?.textContent`)) === 'demo-project');
+      await shoot(`grid-${size}-${theme}`);
+    }
+  }
+
+  // 安全区：iPhone 横屏（左右各 59、底 21）。第一列在安全区之外，滚到底最后一行完整可见。
+  await openGrid('landscape', 'ios', 'light');
+  const safe = await evaluate(`(async () => { const b = ${bodyOf}; b.scrollTop = b.scrollHeight; b.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const cells = [...document.querySelectorAll('#grid .cell')], box = b.getBoundingClientRect(), last = cells.at(-1).getBoundingClientRect();
+    return { left: Math.min(...cells.map(c => c.getBoundingClientRect().left)), right: Math.max(...cells.map(c => c.getBoundingClientRect().right)), w: innerWidth, bottom: last.bottom, paneBottom: box.bottom, text: cells.at(-1).textContent }; })()`);
+  check('图标视图 iPhone 横屏：左右留出安全区，滚到底最后一行完整可见（底部安全区之上）', safe.left >= 59 && safe.right <= safe.w - 59 && safe.text.includes('zz-119') && safe.bottom <= safe.paneBottom - 21 + 0.5, JSON.stringify(safe));
+
+  // 真实交互（Mac）：单击进入、头部返回、回去恢复位置；进入时回到顶部。
+  await openGrid('mac', 'mac', 'light');
+  const rootTop = await setGridScroll(240);
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await settled('进入 docs');
+  const entered1 = { scroll: await gridScroll(), back: await evaluate(`document.querySelectorAll('#grid .ghead button[aria-label="返回"]').length`), names: (await evaluate(gridNames)).slice(0, 4) };
+  check('图标视图：单击文件夹进入这一层，头部有返回键和目录名，进入后在顶部', entered1.scroll === 0 && entered1.back === 1 && entered1.names.includes('README.md'), JSON.stringify(entered1));
+  await evaluate(`document.querySelector('#grid .ghead button').click()`);
+  await until(`${headName} === 'demo-project'`, '回到根目录');
+  await frames();
+  check('图标视图：回上一层恢复进去之前的滚动位置，视口里没有空白', (await gridScroll()) === rootTop && (await evaluate(gridCovered)).length === 0, `${await gridScroll()} / ${rootTop}`);
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '再进 docs');
+  await clickCell(LONG_DIR);
+  await until(`${headName} === '${LONG_DIR}'`, '进入长目录名');
+  check('图标视图：头部标题是当前目录名（长名字截断不撑破头部）', await evaluate(`(() => { const h = document.querySelector('#grid .ghead'), n = h.querySelector('.gname-head'); return h.scrollWidth <= h.clientWidth + 1 && n.scrollWidth >= n.clientWidth; })()`));
+  await shoot('grid-mac-nested');
+
+  // 保存和恢复（真实的 setState/getState）：根目录滚到某处、进入 docs，存下之后重新载入，回到 docs，位置在，往上一层回到顶部之外的……（内存的记录没了，回到顶部）。
+  await openGrid('mac', 'mac', 'light');
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
+  await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
+  await until(`${headName} === 'docs'`, '重新载入后回到 docs');
+  check('图标视图：重新载入后回到保存的目录', (await evaluate(gridNames)).includes('README.md'), JSON.stringify((await evaluate(gridNames)).slice(0, 4)));
+  await evaluate(`document.querySelector('#grid .ghead button').click()`);
+  await until(`${headName} === 'demo-project'`, '往上一层');
+  await frames();
+  check('图标视图：重建后再往上一层回到顶部（上层的记录只在内存里）', (await gridScroll()) === 0);
+
+  // 恢复的位置比内容还大（内容变少）：浏览器夹到能到的最大值，不跳回顶部也不越界。
+  await openGrid('mac', 'mac', 'light');
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
+  await evaluate(`(() => { const key = 'harness-state:files', st = JSON.parse(sessionStorage.getItem(key)); for (const record of Object.values(st.sessions)) record.scroll.grid = 99999; sessionStorage.setItem(key, JSON.stringify(st)); })()`);
+  await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
+  await until(`${headName} === 'docs'`, '重新载入后回到 docs');
+  await frames();
+  const clamped = await evaluate(`(() => { const b = ${bodyOf}; return { top: b.scrollTop, max: b.scrollHeight - b.clientHeight }; })()`);
+  check('图标视图：恢复的位置大于内容时用能到的最大值（不越界）', clamped.top === clamped.max && clamped.top >= 0, JSON.stringify(clamped));
+
+  // 两种视图各自的滚动位置：列表滚到某处，切到图标再滚，换回去两边都在；展开状态在。
+  await open('mac', 'mac', 'light');
+  const listTop = await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = 300; p.dispatchEvent(new Event('scroll')); return p.scrollTop; })()`);
+  await switchView('icons');
+  await until(`${gridNames}.length > 0`, '图标视图出现');
+  await frames();
+  const gridTop = await setGridScroll(200);
+  await switchView('list');
+  await until(`getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '换回列表');
+  await frames();
+  check('图标视图：切换视图，列表的滚动位置还在', (await evaluate(`document.getElementById('tree').scrollTop`)) === listTop && (await evaluate(covered)).length === 0, String(await evaluate(`document.getElementById('tree').scrollTop`)));
+  await switchView('icons');
+  await until(`getComputedStyle(document.getElementById('grid')).visibility === 'visible'`, '换回图标');
+  await frames();
+  check('图标视图：换回图标，网格的滚动位置还在，视口里没有空白', (await gridScroll()) === gridTop && (await evaluate(gridCovered)).length === 0, `${await gridScroll()} / ${gridTop}`);
+
+  // iPhone 原生返回：路径只声明一处，on(back) 按 steps 退层（控制页的返回按钮发 { harness: 'back' }，steps 恒为 1）。
+  await openGrid('portrait', 'ios', 'light');
+  await clickCell('docs');
+  await until(`${gridNames}.includes('README.md')`, '进入 docs');
+  await clickCell(LONG_DIR);
+  await until(`${gridNames}.includes('${LONG_SUB}')`, '进入长目录');
+  const backs = await evaluate(`window.__backs`);
+  check('图标视图 iPhone：coda.back 声明上层的标题（由远到近，不含当前页）', JSON.stringify(backs.at(-1)) === JSON.stringify(['demo-project', 'docs']), JSON.stringify(backs));
+  await evaluate(`postMessage({ harness: 'back' }, '*')`);
+  await until(`document.querySelector('.bar-title').textContent === 'docs'`, '原生返回退了一层');
+  check('图标视图 iPhone：原生返回退一层，工具条标题跟着变，路径重新声明', JSON.stringify((await evaluate(`window.__backs`)).at(-1)) === JSON.stringify(['demo-project']) && (await evaluate(gridNames)).includes('README.md'));
+  await shoot('grid-ios-nested');
+  await openGrid('landscape', 'ios', 'light');
+  await clickCell('docs');
+  await until(`${gridNames}.includes('README.md')`, '横屏进入 docs');
+  await evaluate(`document.querySelector('.bar .exit').click()`);
+  await until(`${gridNames}.includes('zz-000.txt') || ${gridNames}.includes('src')`, '横屏返回退一层');
+  check('图标视图 iPhone 横屏：页内返回先退目录，不关视图', (await evaluate(`window.__backs`)).length >= 1 && !(await evaluate(gridNames)).includes('README.md'));
+
+  // ---- 两万条：节点数、滚动、进入目录的耗时 ----
+  await mkdir(join(bulkRoot, 'bulk'), { recursive: true });
+  await mkdir(join(bulkRoot, 'small'), { recursive: true });
+  await writeFile(join(bulkRoot, 'small', 'x.txt'), 'x');
+  for (let from = 0; from < BULK; from += 500) await Promise.all(Array.from({ length: Math.min(500, BULK - from) }, (_, i) => writeFile(join(bulkRoot, 'bulk', `item-${String(from + i).padStart(5, '0')}.txt`), '')));
+  await openGrid('mac', 'mac', 'light');
+  await fetch(`${serverUrl}ctl?action=session:B`); // 会话 B 的根目录是 bulk-project
+  await until(`${gridNames}.includes('bulk')`, '会话 B 的根目录');
+  await settled('会话 B');
+  const entered = await evaluate(`(async () => { const t0 = performance.now(); [...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === 'bulk').click();
+    while (![...document.querySelectorAll('#grid .cell')].some(c => c.querySelector('.gname').textContent.startsWith('item-'))) await new Promise(r => requestAnimationFrame(r));
+    return performance.now() - t0; })()`);
+  // 一页（96 KiB）放不下 2 万条：翻到底。
+  for (let i = 0; i < 80; i++) {
+    const height = await evaluate(`parseFloat(document.querySelector('#grid .gspacer').style.height)`);
+    const clicked = await evaluate(`(async () => { const b = ${bodyOf}; b.scrollTop = b.scrollHeight; b.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const more = document.querySelector('#grid .gnote.more'); if (!more) return false; more.click(); return true; })()`);
+    if (!clicked) break;
+    await until(`parseFloat(document.querySelector('#grid .gspacer').style.height) > ${height}`, '翻页后的新一页');
+  }
+  const total = await evaluate(`(() => { const sp = document.querySelector('#grid .gspacer'), cell = document.querySelector('#grid .cell').getBoundingClientRect().height, cols = Math.floor(${bodyOf}.clientWidth / 72);
+    return { rows: Math.round(parseFloat(sp.style.height) / cell), expected: Math.ceil(${BULK} / cols), cols }; })()`);
+  check(`图标视图：${BULK} 条全部翻出来，总高度就是 ceil(n / 列数) 行`, total.rows === total.expected, JSON.stringify(total));
+  let maxNodes = 0, blank = [];
+  for (const fraction of [0, 0.13, 0.37, 0.5, 0.71, 0.99, 1]) {
+    await evaluate(`(() => { const b = ${bodyOf}; b.scrollTop = (b.scrollHeight - b.clientHeight) * ${fraction}; b.dispatchEvent(new Event('scroll')); })()`);
+    await frames();
+    maxNodes = Math.max(maxNodes, await evaluate(`document.querySelectorAll('#grid .gi').length`));
+    blank.push(...(await evaluate(gridCovered)));
+  }
+  check(`图标视图：${BULK} 条滚过 7 个位置，视口里没有空白`, blank.length === 0, JSON.stringify(blank));
+  check(`图标视图：${BULK} 条时画出的节点数有上限（可见的一段加上下各 2 行）`, maxNodes > 0 && maxNodes <= 3 * 40, String(maxNodes));
+  console.log(`数字（本机无头 Chrome，不是 WKWebView）：${BULK} 条目录，Mac 侧栏 ${total.cols} 列，滚动时最多 ${maxNodes} 个节点，进入目录到第一屏出现 ${Math.round(entered)} 毫秒`);
+  await fetch(`${serverUrl}ctl?action=session:A`);
   exitCode = failures.length ? 1 : 0;
   keepShots = true;
   console.log(`截图：${shots}`);

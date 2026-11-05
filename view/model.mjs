@@ -11,7 +11,12 @@ const MAX_LOADED_DIRS = 500;
 const HIDDEN = new Set(['.git', '.DS_Store']);
 export const isHidden = name => HIDDEN.has(name);
 export const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
+export const parentOf = path => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 const inside = (path, dir) => path === dir || path.startsWith(`${dir}/`);
+
+// 两种视图：列表（目录树，可以展开多层）和图标（一次看一层，看的那一层是 cwd）。全局一份，和排序一样。
+export const View = Object.freeze({ LIST: 'list', ICONS: 'icons' });
+export const parseView = raw => (raw === View.ICONS ? View.ICONS : View.LIST);
 
 async function pool(items, limit, fn) {
   let index = 0;
@@ -40,9 +45,19 @@ export class Model {
   selected = null;
   showHidden = false;
   sort = DEFAULT_SORT; // 全局一份，由页面存进 persisted
+  view = View.LIST; // 全局一份，由页面存进 persisted
+  cwd = ''; // 图标视图正在看的目录，'' 是根目录；每个会话一份，连同当时的根目录存进会话状态
+  scope = 0; // 根目录的身份：这个会话认定「换了根目录」时加一，依赖根目录的东西（待恢复的滚动）据此作废
   #round = 0; // refresh 的轮次：新一轮开始后，旧一轮不再派发排队的目录
+  #nav = 0; // 导航上下文：进入、返回、换会话、回到根目录、回退各加一；一次请求只有发出时的上下文还在，才能改 cwd
+  #savedRoot = null; // 会话状态里存的根目录；收到这个会话第一条就绪的 root 之前，是否「同一个根目录」靠它比
+  #resolved = false; // 这个会话已经收到过就绪的 root
+  #rootPath = null; // 就绪的根目录路径，之后的变化靠它比
+  #quiet = false; // cwd 是从保存的状态里恢复的，还没确认过：它没了不提示
+  #noticed = -1; // 提示过「文件夹已不存在」的轮次，一轮只提示一次
 
-  constructor({ link, onChange = () => {} }) { Object.assign(this, { link, onChange }); }
+  // onLost(path)：cwd 没了、已经退到上一层时调用一次（恢复时不调用）。
+  constructor({ link, onChange = () => {}, onLost = () => {} }) { Object.assign(this, { link, onChange, onLost }); }
 
   get ready() { return this.root?.state === RootState.READY; }
 
@@ -63,6 +78,12 @@ export class Model {
     this.session = session ?? null;
     this.root = null;
     this.dirs = new Map();
+    this.#nav++;
+    this.#resolved = false;
+    this.#rootPath = null;
+    this.#savedRoot = typeof saved?.root === 'string' ? saved.root : null;
+    this.cwd = typeof saved?.cwd === 'string' ? saved.cwd : '';
+    this.#quiet = this.cwd !== '';
     this.wanted = new Map(Object.entries(saved?.loaded ?? {}).map(([path, count]) => [path, Math.min(count, RESTORE_LIMIT)]));
     const paths = (saved?.expanded ?? []).filter(path => path !== '');
     this.expanded = new Set(paths.filter(path => !path.includes('/') || paths.includes(path.slice(0, path.lastIndexOf('/')))));
@@ -73,9 +94,24 @@ export class Model {
   // 只换根目录状态，不动会话状态；ready 时重新取全部。
   onRoot({ generation, state, path }) {
     if (generation !== this.link.generation) return null;
+    if (state === RootState.READY) this.#identify(path);
     this.root = { state, path };
     this.onChange();
     return state === RootState.READY ? this.refresh() : Promise.resolve();
+  }
+
+  // 根目录有没有换：重建页面后 model.root 是 null，不能靠「路径变了」，否则每次重建都算换了。
+  // 这个会话第一条就绪的 root 和保存的根目录比（没存根目录的旧状态当作没换），之后的 root 和上一次比。换了就全部回到根目录。
+  #identify(path) {
+    const changed = this.#resolved ? this.#rootPath !== path : this.#savedRoot !== null && this.#savedRoot !== path;
+    this.#resolved = true;
+    this.#rootPath = path;
+    if (!changed) return;
+    this.scope++;
+    this.#nav++;
+    this.cwd = '';
+    this.#quiet = false;
+    this.wanted = new Map();
   }
 
   onChanged({ generation }) {
@@ -87,7 +123,40 @@ export class Model {
   refresh({ cap = Infinity } = {}) {
     if (!this.ready) return Promise.resolve();
     const { generation } = this.link, round = ++this.#round;
-    return pool(['', ...this.expanded], MAX_PARALLEL, path => (round === this.#round ? this.#reload(path, generation, { cap }) : undefined));
+    return pool(this.requested(), MAX_PARALLEL, path => (round === this.#round ? this.#reload(path, generation, { cap }) : undefined));
+  }
+
+  // 一轮要取的目录：列表是根和展开的，图标是根和 cwd；同一路径只取一次。
+  requested() { return this.view === View.ICONS ? [...new Set(['', this.cwd])] : ['', ...this.expanded]; }
+
+  // 换视图：马上按新的集合刷新，作废旧的排队轮次；回来之前显示已有的内容，没有就显示读取中。展开状态不动。
+  setView(view) {
+    const next = parseView(view);
+    if (next === this.view) return Promise.resolve();
+    this.view = next;
+    this.onChange();
+    return this.refresh();
+  }
+
+  // 图标视图进入一层：cwd 换成它并加载。返回 levels 层（缺省一层，到根为止）。
+  enter(path) {
+    this.cwd = path;
+    return this.#go();
+  }
+
+  leave(levels = 1) {
+    let next = this.cwd;
+    for (let i = 0; i < levels && next !== ''; i++) next = parentOf(next);
+    if (next === this.cwd) return Promise.resolve();
+    this.cwd = next;
+    return this.#go();
+  }
+
+  #go() {
+    this.#nav++;
+    this.#quiet = false;
+    this.onChange();
+    return this.retry(this.cwd);
   }
 
   // 换排序：已加载的目录按新顺序重新取，取够现在的条数，这次最多 RESTORE_LIMIT 条；每个目录一次替换。
@@ -105,7 +174,7 @@ export class Model {
     if (this.link.generation !== generation) return; // 排队时会话已换，旧任务不碰新会话
     let dir = this.dirs.get(path);
     if (!dir) this.dirs.set(path, dir = { entries: [], next: null, loaded: false, loading: false, error: null, token: 0, pages: 0, sortFallback: false });
-    const token = ++dir.token, { sort } = this;
+    const token = ++dir.token, { sort } = this, nav = this.#nav;
     const want = more ? dir.entries.length + 1 : Math.min(Math.max(dir.entries.length, this.wanted.get(path) ?? 0), cap);
     dir.loading = true;
     this.onChange();
@@ -130,16 +199,37 @@ export class Model {
         pages++;
       } while (pages === 0 || (next && entries.length < want));
       if (!current()) return;
-      Object.assign(dir, { entries, next, loaded: true, error: null, pages, sortFallback });
+      Object.assign(dir, { entries, next, loaded: true, error: null, pages, sortFallback, sort });
       this.wanted.delete(path); // 成功后才删：取页失败后重试还要取够保存的条数
+      if (path === this.cwd) this.#quiet = false;
     } catch (error) {
       if (error.stale || !current()) return;
-      if (error.code === ErrorCode.NOT_FOUND && path !== '') this.#drop(path);
-      else if (error.code !== ErrorCode.NO_ROOT) dir.error = { code: error.code, message: error.message };
+      if (error.code === ErrorCode.NOT_FOUND && path !== '') this.#lost(path, nav);
+      else if (error.code !== ErrorCode.NO_ROOT) {
+        dir.error = { code: error.code, message: error.message };
+        if (path === this.cwd) this.#quiet = false;
+      }
     } finally {
       if (current()) dir.loading = false;
       this.onChange();
     }
+  }
+
+  // 目录没了（not_found）：所有列目录入口都走这里。先清掉失效的子树；cwd 在里面、而且发出请求以来没有导航过，就退到上一层。
+  // 退到哪一层靠新发的请求：它再 not_found 又走到这里，所以每级只试一次；别的错误停在那一级，显示失败行和重试。
+  // 清掉子树后原目录对象没了，原请求的检查必然为假，但回退不靠它：回退看的是导航上下文，每一级有自己的请求。
+  #lost(path, nav) {
+    const covers = nav === this.#nav && inside(this.cwd, path);
+    this.#drop(path);
+    if (!covers) return;
+    this.#nav++;
+    this.cwd = parentOf(path);
+    if (!this.#quiet && this.#noticed !== this.#round && this.view === View.ICONS) {
+      this.#noticed = this.#round;
+      this.onLost(path);
+    }
+    this.onChange();
+    this.retry(this.cwd);
   }
 
   #drop(path) {
@@ -150,7 +240,8 @@ export class Model {
   toggle(path) {
     if (this.expanded.has(path)) {
       for (const key of [...this.expanded]) if (inside(key, path)) this.expanded.delete(key);
-      for (const key of [...this.dirs.keys()]) if (key !== '' && inside(key, path)) this.dirs.delete(key);
+      // cwd 的条目留着：图标视图还在看它
+      for (const key of [...this.dirs.keys()]) if (key !== '' && key !== this.cwd && inside(key, path)) this.dirs.delete(key);
       this.onChange();
     } else {
       this.expanded.add(path);
@@ -164,7 +255,9 @@ export class Model {
   async loadMore(path) {
     const dir = this.dirs.get(path), { generation } = this.link;
     if (!dir?.next || dir.loading || !this.ready) return;
-    const token = ++dir.token;
+    // 游标是按另一种排序取的（换排序时这个目录没重建过）：不用它，从第一页重取，条数比现在多一条。
+    if (dir.sort !== this.sort) return this.#reload(path, generation, { more: true, expired: true });
+    const token = ++dir.token, nav = this.#nav;
     dir.loading = true;
     this.onChange();
     const current = () => this.link.generation === generation && this.dirs.get(path) === dir && dir.token === token;
@@ -177,6 +270,7 @@ export class Model {
       if (error.stale || !current()) return;
       // 游标过期：从第一页重取，条数比现在多一条，所以还会接着往下取。重取自己管 loading。
       if (error.code === ErrorCode.CURSOR_EXPIRED) return this.#reload(path, generation, { more: true, expired: true });
+      if (error.code === ErrorCode.NOT_FOUND && path !== '') return this.#lost(path, nav);
       dir.error = { code: error.code, message: error.message };
     } finally {
       if (current()) dir.loading = false;
@@ -190,7 +284,9 @@ export class Model {
   snapshot() {
     const loaded = {};
     for (const [path, dir] of this.dirs) if (dir.pages > 1 && dir.entries.length > 0) loaded[path] = dir.entries.length;
-    return { expanded: [...this.expanded], selected: this.selected, loaded };
+    // 还没收到这个会话就绪的 root 时，cwd 和根目录还是保存的那一份，原样存回去，不能被重建途中的一次保存冲掉。
+    const root = this.#resolved ? this.#rootPath : this.#savedRoot;
+    return { expanded: [...this.expanded], selected: this.selected, loaded, cwd: this.cwd, ...(root === null ? {} : { root }) };
   }
 }
 
@@ -205,10 +301,11 @@ const parseLoaded = raw => Object.fromEntries(Object.entries(raw && typeof raw =
 
 // 读回来的值可能是别的版本或坏的，只认自己的形状。
 export function parseState(raw) {
-  const state = { v: 1, seq: 0, hidden: false, sort: DEFAULT_SORT, sessions: {} };
+  const state = { v: 1, seq: 0, hidden: false, sort: DEFAULT_SORT, view: View.LIST, sessions: {} };
   if (!raw || typeof raw !== 'object' || raw.v !== 1) return state;
   state.hidden = raw.hidden === true;
   state.sort = parseSort(raw.sort) ?? DEFAULT_SORT;
+  state.view = parseView(raw.view);
   state.seq = Number.isSafeInteger(raw.seq) ? raw.seq : 0;
   for (const [id, item] of Object.entries(raw.sessions ?? {})) {
     if (!item || typeof item !== 'object') continue;
@@ -217,8 +314,13 @@ export function parseState(raw) {
       at: Number.isSafeInteger(item.at) ? item.at : 0, expanded: strings(item.expanded, 5000),
       selected: typeof item.selected === 'string' && item.selected.length <= 1024 ? item.selected : null,
       // 滚动位置是按当时的排序存的；旧版本没有这个字段，那时一定是默认排序。
-      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? DEFAULT_SORT },
+      // 两种视图各存各的位置和当时的排序：tree 和 sort 是列表的，grid 和 gridSort 是图标的（旧版本没有后两个）。
+      scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? DEFAULT_SORT,
+        grid: num(scroll.grid), gridSort: parseSort(scroll.gridSort) ?? DEFAULT_SORT },
     };
+    // cwd 和存它时的根目录：超长或形状不对当作没有，回到根目录。旧版本没有这两个字段。
+    const path = value => (typeof value === 'string' && value.length <= 1024 ? value : undefined);
+    if (path(item.cwd) !== undefined && path(item.root) !== undefined && !item.cwd.startsWith('/')) Object.assign(state.sessions[id], { cwd: item.cwd, root: item.root });
     const loaded = parseLoaded(item.loaded);
     if (Object.keys(loaded).length > 0) state.sessions[id].loaded = loaded;
   }

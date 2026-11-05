@@ -20,10 +20,10 @@ export const entries = (names, nextCursor = null) => ({
 });
 
 // 手动传输：页面发出的消息记在 sent 里，测试自己决定回答什么、什么时候回答。
-export function manual() {
+export function manual(modelOptions = {}) {
   const sent = [], timers = fakeTimers();
   const link = new Link({ post: message => sent.push(message), timers });
-  const model = new Model({ link });
+  const model = new Model({ link, ...modelOptions });
   const t = {
     sent, timers, link, model,
     session: (generation, session, saved) => model.receive({ type: 'session', generation, session }, saved),

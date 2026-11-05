@@ -1,15 +1,17 @@
-// 资源管理器的页面入口：消息收发、状态保留、工具栏。状态在 model.mjs，渲染在 tree.mjs、preview.mjs 和 info.mjs，菜单和提示在 menu.mjs 和 hint.mjs。
+// 资源管理器的页面入口：消息收发、状态保留、工具栏、图标视图的进入和返回。状态在 model.mjs，渲染在 tree.mjs、grid.mjs、preview.mjs 和 info.mjs，菜单和提示在 menu.mjs 和 hint.mjs，滚动位置的恢复在 restore.mjs。
 import { EXIT, paintBar } from './bar.mjs';
 import { createChat } from './chat.mjs';
 import { connect } from './connection.mjs';
 import { infoText, sortName } from './format.mjs';
+import { mountGrid } from './grid.mjs';
 import { mountHint } from './hint.mjs';
 import { mountInfo } from './info.mjs';
 import { mountMenu } from './menu.mjs';
-import { Model, STATE_LIMIT, noticeText, parseState, putSession, trimState } from './model.mjs';
+import { Model, STATE_LIMIT, View, noticeText, parseState, putSession, trimState } from './model.mjs';
 import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
 import { EntryKind, RootState, SortKey, Type } from './protocol.mjs';
+import { createRestore, createTrail } from './restore.mjs';
 import { mountTree, rootName } from './tree.mjs';
 
 const coda = window.coda;
@@ -20,16 +22,20 @@ const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac'
 const isIOS = coda.platform === 'ios';
 
 let persisted = parseState(quiet(() => coda.getState()));
-// 恢复出来的滚动位置，等内容到了再用一次。
-let pending = { tree: null, preview: null };
+// 恢复出来的预览滚动位置，等内容到了再用一次。目录树和图标视图的在 restore 里。
+let pending = { preview: null };
 
 const conn = connect(coda, { handlers: { session: onSession, root: onRoot, changed: onChanged }, onStatus: () => schedule() });
-const model = new Model({ link: conn.link, onChange: () => schedule() });
+const model = new Model({ link: conn.link, onChange: () => schedule(), onLost: () => hint.show('文件夹已不存在', { warn: false }) });
 model.showHidden = persisted.hidden;
 model.sort = persisted.sort;
+model.view = persisted.view;
 const hint = mountHint($('hint'));
 const menu = mountMenu($('menu'));
 const chat = createChat({ link: conn.link, copy: text => coda.copy(text), hint });
+// 属性页和图标视图的上一层：iPhone 用原生返回（coda.back）；Mac 的客户端会替声明了返回的页面画一个带小箭头的导航，
+// 和侧栏标题重复，所以 Mac 和没有 coda.back 的环境一样，头部最左边自己放返回。
+const nativeBack = isIOS && typeof coda.back === 'function';
 const tree = mountTree($('tree'), model, {
   open: openFile,
   toggle: path => model.toggle(path),
@@ -37,6 +43,16 @@ const tree = mountTree($('tree'), model, {
   retry: path => model.retry(path),
   menu: (event, row) => pathMenu(event, row),
 }, { draggable: !isIOS, longPress: isIOS });
+const grid = mountGrid($('grid'), model, {
+  open: openFile,
+  enter: path => enterDir(path),
+  more: path => model.loadMore(path),
+  retry: path => model.retry(path),
+  menu: (event, cell) => pathMenu(event, cell),
+  back: nativeBack ? null : () => leaveDir(),
+}, { draggable: !isIOS, longPress: isIOS });
+const restore = createRestore(model, { tree, grid });
+const trail = createTrail();
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
   actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
@@ -44,9 +60,7 @@ const preview = mountPreview($('preview'), {
   // 选中文字的右键菜单只有 Mac：iPhone 用系统的选区菜单。
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
 });
-// 属性页：页内一层。iPhone 用原生返回（coda.back）；Mac 的客户端会替声明了返回的页面画一个带小箭头的导航，
-// 和侧栏标题重复，所以 Mac 和没有 coda.back 的环境一样，头部最左边自己放返回。
-const nativeBack = isIOS && typeof coda.back === 'function';
+// 属性页：页内一层。
 let infoOpen = false;
 let dataRound = 0; // 数据轮次：每收到一次 changed 加一，属性页用它判断文件夹的统计结果是不是上一轮的
 const info = mountInfo($('info'), {
@@ -96,7 +110,7 @@ function schedule() {
 
 // 用户点了预览头部的返回：render 据此决定焦点要不要交给目录树，别的模式变化不动焦点。
 let backPressed = false;
-const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.selected !== null && !isIOS ? 'preview' : 'tree');
+const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.selected !== null && !isIOS ? 'preview' : model.view === View.ICONS ? 'grid' : 'tree');
 
 // 说明区只在内容变了才重画，免得重试按钮在点击中途被换掉。
 let noticeKey = null;
@@ -112,20 +126,24 @@ function render() {
   const current = mode();
   const refocus = backPressed && document.hasFocus();
   backPressed = false;
-  for (const [id, name] of [['tree', 'tree'], ['preview', 'preview'], ['notice', 'notice'], ['info', 'info']]) {
-    $(id).classList.toggle('off', current !== name);
-    $(id).inert = current !== name;
+  for (const id of ['tree', 'grid', 'preview', 'notice', 'info']) {
+    $(id).classList.toggle('off', current !== id);
+    $(id).inert = current !== id;
   }
   if (current === 'notice') paintNotice();
-  tree.render();
+  const browsing = current === 'tree' || current === 'grid';
+  (model.view === View.ICONS ? grid : tree).render(); // 只画正在用的视图，另一个留着它的内容和滚动位置
+  landed();
+  restore.settle();
   if (current === 'preview' && preview.path !== model.selected) {
     preview.open(model.selected, pending.preview);
     pending.preview = null;
-  } else if ((current === 'tree' || current === 'notice') && preview.path !== null) preview.close(); // 属性页和预览一样只切可见性，不动别的面板的内容
-  // 返回按钮随预览一起 inert，焦点会掉到页面外：用户刚点了返回、页面又持有焦点时交给目录树。
+  } else if ((browsing || current === 'notice') && preview.path !== null) preview.close(); // 属性页和预览一样只切可见性，不动别的面板的内容
+  // 返回按钮随预览一起 inert，焦点会掉到页面外：用户刚点了返回、页面又持有焦点时交给目录树或网格。
   // 后台刷新、切会话、root 变化造成的切换不动焦点，免得抢走客户端输入框的焦点。
-  if (refocus && current === 'tree') { $('tree').tabIndex = -1; $('tree').focus(); }
+  if (refocus && browsing) { $(current).tabIndex = -1; $(current).focus(); }
   syncToolbar();
+  declareBack();
 }
 
 // ---- 工具栏：Mac 用 coda.toolbar，没有的（iOS、harness）退成页内一条 ----
@@ -140,7 +158,7 @@ const toolbarItems = () => infoOpen ? [] : hasToolbar
 // iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
 // 属性页上只留返回：竖屏有原生导航栏，整条工具条不显示；横屏导航栏隐藏，页面自己给返回（显示与否都由 style.css 的横屏媒体查询决定）。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
-const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: model.ready ? rootName(model.root.path) : '' }, MORE];
+const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: model.ready ? dirTitle() : '' }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar() {
@@ -165,25 +183,43 @@ const moreMenu = () => ({ items: [
   ...Object.values(SortKey).map(key => ({ label: sortName(key), checked: key === model.sort, radio: true, run: () => changeSort(key) })),
 ] });
 
-// 换排序：旧的滚动位置对新顺序没有意义，待恢复的作废，回到顶部；排序是全局的，存进 persisted。选当前项什么都不做。
+// 换排序：旧的滚动位置对新顺序没有意义，待恢复的和上层的记录作废，两种视图都回到顶部；排序是全局的，存进 persisted。选当前项什么都不做。
 function changeSort(sort) {
   const before = model.sort;
   model.setSort(sort);
   if (model.sort === before) return; // 同值：什么都没换
   persisted.sort = model.sort;
-  pending.tree = null;
+  restore.clear();
+  trail.clear();
   tree.scrollTo(0);
+  grid.scrollTo(0);
+}
+
+// 换视图：全局一份，存进 persisted；两种视图各留着自己的内容和滚动位置，换回来还在。
+// 第 2 步的「显示」菜单调用它；这一步没有用户入口，测试和 harness 经模块导出调用。
+export function changeView(view) {
+  const before = model.view;
+  model.setView(view);
+  if (model.view === before) return;
+  persisted.view = model.view;
+  menu.hide();
+  declareBack();
+  schedule();
 }
 
 function act(id, button) {
-  // 横屏时导航栏隐藏，属性页的原生返回看不到：这里的「返回」先关属性页，在根层才关视图。
-  if (id === EXIT.id) { if (infoOpen) { backPressed = true; closeInfo(); } else quiet(() => coda.close()); }
+  // 横屏时导航栏隐藏，原生返回看不到：这里的「返回」和原生返回走同一个退层逻辑，在根层才关视图。
+  if (id === EXIT.id) { if (goBack(1)) backPressed = true; else quiet(() => coda.close()); }
   else if (id === 'more') {
     // 键盘激活没有 pointerdown，菜单外点击那条规则不管用：同一个按钮再次激活就关闭。
     if (!menu.hidden && menu.opener === button) menu.hide();
     else menu.open(button, moreMenu());
   }
-  else if (id === 'hidden') { model.setShowHidden(!model.showHidden); persisted.hidden = model.showHidden; }
+  else if (id === 'hidden') {
+    model.setShowHidden(!model.showHidden);
+    persisted.hidden = model.showHidden;
+    if (model.view === View.ICONS) { restore.drop('grid'); trail.clear(); grid.scrollTo(0); } // 显示的条目变了，旧位置对不上
+  }
   else if (id === 'refresh') {
     conn.refresh();
     model.refresh();
@@ -206,7 +242,9 @@ function saveNow() {
   const top = preview.scroll();
   putSession(persisted, session, {
     ...model.snapshot(),
-    scroll: { tree: pending.tree ?? tree.scroll(), top: pending.preview?.top ?? top.top, left: pending.preview?.left ?? top.left, sort: model.sort },
+    // 还没恢复的位置先存它，别存成还没滚过去的 0。
+    scroll: { tree: restore.top('tree') ?? tree.scroll(), top: pending.preview?.top ?? top.top, left: pending.preview?.left ?? top.left, sort: model.sort,
+      grid: restore.top('grid') ?? grid.scroll(), gridSort: model.sort },
   });
   persisted = trimState(persisted, session);
   // setState 超限会同步抛错：再收紧一次，仍失败就放弃这次，不影响界面。
@@ -214,6 +252,9 @@ function saveNow() {
 }
 quiet(() => coda.on('visibility', visible => { if (!visible) saveNow(); }));
 $('tree').addEventListener('scroll', queueSave, { passive: true });
+$('tree').addEventListener('scroll', () => restore.scrolled('tree'), { passive: true });
+grid.onScroll(queueSave);
+grid.onScroll(() => restore.scrolled('grid'));
 preview.onScroll(queueSave);
 preview.onScroll(menu.hide);
 
@@ -231,26 +272,82 @@ function pathMenu(event, row) {
   ] });
 }
 $('tree').addEventListener('scroll', menu.hide, { passive: true });
+grid.onScroll(menu.hide);
 
-// ---- 属性页：iPhone 进入时声明原生返回一层，所有关闭的路径（原生返回、横屏的返回、换会话、根目录变化）都重新声明回根层 ----
+// ---- 图标视图的进入和返回 ----
+// 进入子目录滚到顶部，先记下上层的位置；回上一层恢复进去之前的位置（记录在内存里，页面卸载后没有，回到顶部）。
+// shownCwd：页面已经处理过的 cwd；它被模型自己换掉（目录没了退到上一层、根目录变了回到根目录）时，在 landed 里补上滚动。
+let shownCwd = '';
+function enterDir(path) {
+  trail.remember(model.cwd, grid.scroll());
+  model.enter(path);
+  shownCwd = model.cwd;
+  restore.drop('grid');
+  grid.scrollTo(0);
+  declareBack();
+}
+// 退 levels 层（到根为止）；已经在根目录返回 false。
+function leaveDir(levels = 1) {
+  if (model.cwd === '') return false;
+  model.leave(levels);
+  land(trail.take(model.cwd) ?? 0);
+  declareBack();
+  return true;
+}
+function land(top) {
+  shownCwd = model.cwd;
+  grid.scrollTo(0); // 先回到顶部：之后的滚动都是内容变化或用户滚的，恢复据此判断用户有没有动过
+  restore.plan('grid', top);
+}
+// 落到哪一层就用哪一层的位置，失效目录待恢复的位置作废。
+function landed() {
+  if (model.cwd !== shownCwd) land(trail.take(model.cwd) ?? 0);
+}
+
+// ---- 上一层：iPhone 用原生返回，路径只在这里声明 ----
+// 路径是上层的标题，由远到近，不含当前页：图标视图在 a/b 是 [根目录名, 'a']；列表视图没有。属性页多一层当前页：列表视图是 '资源管理器'，图标视图是当前目录名。
+// 标题是当前目录名：根目录是根目录名。
+const dirTitle = () => (model.cwd === '' || model.view !== View.ICONS ? rootName(model.root.path) : model.cwd.slice(model.cwd.lastIndexOf('/') + 1));
+function backPath() {
+  const icons = model.view === View.ICONS && model.ready;
+  const upper = icons && model.cwd !== '' ? [rootName(model.root.path), ...model.cwd.split('/').slice(0, -1)] : [];
+  return infoOpen ? [...upper, icons ? dirTitle() : '资源管理器'] : upper;
+}
+let declared = [];
+// 路径没变不重复声明；force：客户端已经退了一层，路径没变也要重新告诉它现在在哪。
+function declareBack(force = false) {
+  if (!nativeBack) return;
+  const path = backPath();
+  if (!force && JSON.stringify(path) === JSON.stringify(declared)) return;
+  declared = path;
+  quiet(() => coda.back(path));
+}
+// 退 steps 层：先关属性页，再退图标视图的目录；返回是不是真的退了。横屏的返回和原生返回共用。
+function goBack(steps) {
+  let used = 0;
+  if (infoOpen && steps > used) { closeInfo(); used++; }
+  const levels = Math.min(steps - used, model.view === View.ICONS && model.cwd !== '' ? model.cwd.split('/').length : 0);
+  if (levels > 0) { leaveDir(levels); used += levels; }
+  return used > 0;
+}
+if (nativeBack) quiet(() => coda.on('back', event => {
+  if (!goBack(Number.isInteger(event?.steps) && event.steps > 0 ? event.steps : 1)) declareBack(true); // 已经在最上层：重新声明一次
+}));
+
+// ---- 属性页：所有关闭的路径（原生返回、横屏的返回、换会话、根目录变化）都重新声明回上层 ----
 function openInfo(row) {
   infoOpen = true;
   info.open(row.path, row);
-  if (nativeBack) quiet(() => coda.back(['资源管理器']));
+  declareBack();
   schedule();
 }
 function closeInfo() {
   if (!infoOpen) return;
   infoOpen = false;
   info.close(); // 在统计的一并取消
-  if (nativeBack) quiet(() => coda.back([]));
+  declareBack();
   schedule();
 }
-// steps 是退几级，属性页只有一级，不论几都回到目录树；已经不在属性页时也重新声明一次根层。
-if (nativeBack) quiet(() => coda.on('back', () => {
-  if (infoOpen) closeInfo();
-  else quiet(() => coda.back([]));
-}));
 
 // ---- 模块的消息（代次和握手由 connection 处理）----
 function onSession(data) {
@@ -259,14 +356,21 @@ function onSession(data) {
   closeInfo();
   menu.hide();
   tree.reset();
+  grid.reset();
   epoch++;
   opening = false;
   clearTimeout(unlockTimer);
   hint.hide();
   const saved = persisted.sessions[data.session] ?? null;
-  // 目录树的滚动位置是按当时的排序存的；排序是全局的，在别的会话换过就对不上，等内容到了回到顶部。
-  pending = saved ? { tree: saved.scroll.sort === model.sort ? saved.scroll.tree : 0, preview: { top: saved.scroll.top, left: saved.scroll.left } } : { tree: null, preview: null };
+  pending = { preview: saved ? { top: saved.scroll.top, left: saved.scroll.left } : null };
   model.receive(data, saved);
+  trail.clear();
+  restore.clear();
+  // 两种视图的滚动位置各按当时的排序存；排序是全局的，在别的会话换过就对不上，等内容到了回到顶部。恢复绑定这个会话、根目录、排序和目录。
+  tree.scrollTo(0);
+  restore.plan('tree', saved && saved.scroll.sort === model.sort ? saved.scroll.tree : 0);
+  shownCwd = model.cwd;
+  land(saved && saved.scroll.gridSort === model.sort ? saved.scroll.grid : 0);
 }
 
 function onRoot(data) {
@@ -276,12 +380,6 @@ function onRoot(data) {
   const done = model.receive(data);
   if (done && data.state === RootState.READY) {
     if (before?.path !== data.path) preview.reload(); else preview.refresh();
-    const { generation } = conn.link;
-    done.then(() => {
-      if (conn.link.generation !== generation || pending.tree === null) return;
-      tree.scrollTo(pending.tree);
-      pending.tree = null;
-    });
   }
 }
 
@@ -293,7 +391,8 @@ function onChanged(data) {
   info.refresh();
 }
 
-tree.remeasure();
-quiet(() => coda.on('theme', () => tree.remeasure()));
+const remeasure = () => { tree.remeasure(); grid.remeasure(); };
+remeasure();
+quiet(() => coda.on('theme', remeasure));
 render();
 conn.hello();

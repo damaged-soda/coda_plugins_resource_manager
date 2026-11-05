@@ -8,6 +8,7 @@ class Text {
 class Emitter {
   #listeners = new Map();
   addEventListener(type, fn) { this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), fn]); }
+  removeEventListener(type, fn) { this.#listeners.set(type, (this.#listeners.get(type) ?? []).filter(other => other !== fn)); }
   emit(event) { for (const fn of this.#listeners.get(event.type) ?? []) fn(event); }
 }
 
@@ -20,6 +21,7 @@ export class Element extends Emitter {
   scrollTop = 0;
   scrollLeft = 0;
   clientHeight = 0;
+  clientWidth = 0;
   offsetWidth = 100;
   offsetHeight = 100;
   offsetTop = 0;
@@ -101,11 +103,11 @@ export function visible(node) {
 
 // 装上 window、document 等全局并加载真实的页面入口（默认 view/app.mjs），每次得到全新的模块实例。
 let instance = 0;
-export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'preview', 'notice', 'menu', 'hint', 'info'] } = {}) {
+export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree', 'grid', 'preview', 'notice', 'menu', 'hint', 'info'] } = {}) {
   const elements = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   elements.bar.hidden = true;
   for (const id of ['menu', 'hint']) if (elements[id]) elements[id].hidden = true;
-  const windowEmitter = new Emitter(), documentEmitter = new Emitter();
+  const windowEmitter = new Emitter(), documentEmitter = new Emitter(), resizers = [];
   const dom = {
     window: Object.assign(windowEmitter, { coda, innerWidth: 320, innerHeight: 600 }),
     document: Object.assign(documentEmitter, { getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag),
@@ -113,16 +115,20 @@ export async function loadApp(t, coda, { entry = 'app.mjs', ids = ['bar', 'tree'
       hasFocus: () => !globalThis.document.windowBlurred }),
     innerWidth: 320,
     innerHeight: 600,
-    ResizeObserver: class { observe() {} },
+    // 观察到的尺寸变化：测试改了 clientWidth 之后调用返回的 resize()。
+    ResizeObserver: class { constructor(fn) { resizers.push(fn); } observe() {} },
   };
   const saved = Object.fromEntries(Object.keys(dom).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   Object.assign(globalThis, dom);
   t.after(() => {
     for (const [key, descriptor] of Object.entries(saved)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   });
-  await import(`../../view/${entry}?instance=${++instance}`);
+  const app = await import(`../../view/${entry}?instance=${++instance}`);
   return {
     ...elements,
+    // 入口模块的导出（图标视图的 changeView）和尺寸变化。
+    app,
+    resize: () => resizers.forEach(fn => fn()),
     // 模块发给页面的消息。
     post: data => windowEmitter.emit({ type: 'message', data }),
   };
