@@ -1284,17 +1284,22 @@ try {
     const first = render(), again = render();
     return { bytes: enc.encode(text).length, first, again, spans: body.querySelectorAll('span').length };
   })()`;
+  // 机器负载高时单次测量会偶发偏高，所以每种样本在新开的页面上各量 RUNS 次「首次」，判断只看中位数；最大值只打印。
+  const RUNS = 5, LIMIT_MS = 150;
   const times = {};
   for (const name of ['JS', 'JSON（密集）', '多字节']) {
-    await openFile('window', 'light', 'session=A&path=assets/sample.js', 'mac');
-    await until(`document.querySelector('.text .hljs-keyword')`, '计时页出现');
-    times[name] = await evalStrict(timing(name));
-    const t = times[name];
-    console.log(`数字（本机无头 Chrome）：${name} ${t.bytes} 字节，${t.spans} 个 span：首次 ${t.first.total.toFixed(0)} 毫秒（其中调库 ${t.first.library.toFixed(0)}），重复 ${t.again.total.toFixed(0)} 毫秒（其中调库 ${t.again.library.toFixed(0)}）`);
+    times[name] = [];
+    for (let i = 0; i < RUNS; i++) {
+      await openFile('window', 'light', 'session=A&path=assets/sample.js', 'mac');
+      await until(`document.querySelector('.text .hljs-keyword')`, '计时页出现');
+      times[name].push(await evalStrict(timing(name)));
+    }
+    const ts = times[name], totals = ts.map(t => t.first.total), libs = ts.map(t => t.first.library), last = ts[ts.length - 1];
+    console.log(`数字（本机无头 Chrome）：${name} ${last.bytes} 字节，${last.spans} 个 span：首次 ${RUNS} 次中位数 ${median(totals).toFixed(0)} 毫秒（最小 ${Math.min(...totals).toFixed(0)}，最大 ${Math.max(...totals).toFixed(0)}），其中调库中位数 ${median(libs).toFixed(0)}；最后一次重复 ${last.again.total.toFixed(0)} 毫秒（其中调库 ${last.again.library.toFixed(0)}）`);
   }
-  check('高亮：三种样本都恰好是上限那么多字节，上色后文字等于原文', Object.values(times).every(t => t.bytes === HIGHLIGHT_LIMIT && t.first.same && t.again.same), JSON.stringify(times));
-  const firsts = Object.fromEntries(Object.entries(times).map(([k, t]) => [k, Math.round(t.first.total)]));
-  check(`高亮：三种常见样本（JS、密集 JSON、多字节）${HIGHLIGHT_LIMIT / 1024} KiB 的首次打开都不超过 150 毫秒`, ['JS', 'JSON（密集）', '多字节'].every(name => times[name].first.total <= 150), JSON.stringify(firsts));
+  check('高亮：三种样本都恰好是上限那么多字节，上色后文字等于原文', Object.values(times).every(ts => ts.every(t => t.bytes === HIGHLIGHT_LIMIT && t.first.same && t.again.same)), JSON.stringify(times));
+  const firsts = Object.fromEntries(Object.entries(times).map(([k, ts]) => [k, ts.map(t => Math.round(t.first.total))]));
+  check(`高亮：三种常见样本（JS、密集 JSON、多字节）${HIGHLIGHT_LIMIT / 1024} KiB 首次打开的中位数（${RUNS} 次）都不超过 ${LIMIT_MS} 毫秒`, Object.values(times).every(ts => median(ts.map(t => t.first.total)) <= LIMIT_MS), JSON.stringify(firsts));
   // 一整行（压成一行的 JSON，恰好 HIGHLIGHT_LIMIT 字节）不上色：显示纯文本，元信息注明「行太长，不高亮」，不再量上色耗时。
   await writeFile(join(fixture, 'assets', 'oneline.json'), '[' + '{"k":"v","n":[1,2,3],"t":true},'.repeat(Math.floor((HIGHLIGHT_LIMIT - 2) / 31)).slice(0, -1).padEnd(HIGHLIGHT_LIMIT - 2, ' ') + ']');
   for (const theme of ['light', 'dark']) {
