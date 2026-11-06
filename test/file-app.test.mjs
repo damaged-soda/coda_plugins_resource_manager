@@ -14,7 +14,7 @@ async function open(t, { args = { session: 's1', path: FILE }, roots = { '/A': t
   const sent = [], held = [], events = {}, saved = [];
   const host = { sent, held, saved, events, generation: 0, root: null, roots, hold: false, failRead: null };
   const page = await loadFileApp(t, {
-    platform: 'ios', args,
+    platform: 'web', args,
     postMessage: message => { sent.push(message); if (message.type === 'read') queueMicrotask(() => answer(message)); },
     on: (name, fn) => { events[name] = fn; },
     copy: () => {},
@@ -216,6 +216,27 @@ test('恢复的位置在内容到达前不被覆盖；坏的状态被忽略', as
     assert.equal(text(page), 'aaaaa');
     assert.equal(body(page).scrollTop, 0);
   }
+});
+
+test('恢复的初次读取被 changed 作废：位置在接替它的读取里用上，之后才存成新位置（Mac 窗口，同一个信号）', async t => {
+  const { page, host } = await open(t, { state: { v: 1, top: 77, left: 3 } });
+  host.hold = true;
+  host.session('s1');
+  await flush();
+  host.changed();
+  await flush();
+  assert.equal(host.held.length, 2);
+  host.late(host.held[0], 'aaaaa'); // 作废的那次
+  await flush();
+  assert.equal(body(page).scrollTop, 0);
+  host.events.visibility(false);
+  assert.deepEqual(host.saved.at(-1), { v: 1, top: 77, left: 3 }, '位置还留着');
+  host.late(host.held[1], 'aaaaa');
+  await flush();
+  assert.equal(body(page).scrollTop, 77);
+  body(page).scrollTop = 20;
+  host.events.visibility(false);
+  assert.deepEqual(host.saved.at(-1), { v: 1, top: 20, left: 3 });
 });
 
 test('预览收起（gone）再恢复：回到收起前的位置', async t => {

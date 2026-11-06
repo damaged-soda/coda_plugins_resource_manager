@@ -1,10 +1,10 @@
-// 文件页（iPhone 或 Mac 窗口）的测试台：真实的 file-app.mjs 和预览，配假 DOM 和脚本化的假宿主。
+// 文件页（Mac 窗口；别的入口在 iPhone 上打开它时没有工具条）的测试台：真实的 file-app.mjs 和预览，配假 DOM 和脚本化的假宿主。
 import { loadFileApp } from './dom.mjs';
 import { flush } from './fake.mjs';
 
 // files：路径 → { kind, text, size?, mtimeMs? }；size 省略就是正文的字节数。
 const timersOn = new WeakSet();
-export async function open(t, { path, files, platform = 'ios', coda = {} }) {
+export async function open(t, { path, files, platform = 'web', coda = {} }) {
   const sent = [], copied = [], events = {}, host = { files, failRead: null, closed: 0, copied, events };
   let generation = 0, page;
   const answer = request => {

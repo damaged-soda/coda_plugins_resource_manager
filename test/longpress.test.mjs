@@ -80,20 +80,21 @@ test('长按只作用于树的行：「再显示」「更新失败」这类行�
 });
 
 test('触发后紧接着的点击不打开文件，下一次独立点击正常；没有点击跟来时也不误吞后面的', async t => {
-  const { page, host, tick } = await start(t);
+  const { page, host, tick } = await start(t, { back: true });
   down(page, 'a.txt');
   tick(500);
   rowNamed(page, 'a.txt').dispatch('pointerup', touch());
   click(page, 'a.txt');
   await flush();
-  assert.equal(host.calls.open.length, 0, '被吞掉');
+  assert.equal(host.reads().length, 0, '被吞掉');
   escape(); // 菜单开着时点别处只会关菜单，先关掉
 
   down(page, 'a.txt'); // 下一次独立点击
   rowNamed(page, 'a.txt').dispatch('pointerup', touch());
   click(page, 'a.txt');
   await flush();
-  assert.equal(host.calls.open.length, 1);
+  assert.equal(host.reads().length, 1);
+  host.back(); // 关预览回到目录
 
   tick(1000);
   down(page, 'b.txt'); // 触发了，但系统没有送来点击
@@ -104,7 +105,7 @@ test('触发后紧接着的点击不打开文件，下一次独立点击正常�
   rowNamed(page, 'b.txt').dispatch('pointerup', touch());
   click(page, 'b.txt');
   await flush();
-  assert.equal(host.calls.open.length, 2);
+  assert.equal(host.reads().length, 2);
 });
 
 test('Mac 不启用长按（仍用右键）', async t => {
@@ -116,31 +117,12 @@ test('Mac 不启用长按（仍用右键）', async t => {
   assert.ok(visible(page.menu));
 });
 
-test('防连点：open 进行中和刚成功后的重复点击只调一次；失败后能再点；过了缓冲又能点', async t => {
-  const { page, host, tick } = await start(t);
-  let settle;
-  host.openResult = () => new Promise((resolve, reject) => { settle = { resolve, reject }; });
-  click(page, 'a.txt');
+test('快速两次轻点：第一次切到预览，目录树不再接指针事件（.off），只读一次；不调 coda.open', async t => {
+  const { page, host } = await start(t, { back: true });
   click(page, 'a.txt');
   await flush();
-  assert.equal(host.calls.open.length, 1, '进行中');
-  click(page, 'b.txt');
-  assert.equal(rowNamed(page, 'b.txt').classList.contains('sel'), false, '被忽略的点击也不改选中');
-
-  settle.reject(new Error('视图不可用'));
-  await flush();
-  click(page, 'a.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 2, '失败后立刻能再点');
-
-  settle.resolve();
-  await flush();
-  click(page, 'a.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 2, '刚成功，推入动画期间忽略');
-  tick(1000);
-  host.openResult = () => undefined;
-  click(page, 'a.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 3);
+  assert.ok(visible(page.preview));
+  assert.ok(page.tree.classList.contains('off') && page.tree.inert, '树 off 且 inert：第二次轻点落在预览上（真实的指针事件由 harness 验证）');
+  assert.equal(host.reads().length, 1);
+  assert.equal(host.calls.open.length, 0);
 });
