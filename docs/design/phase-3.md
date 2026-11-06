@@ -603,7 +603,7 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 
 ## 15. `0.7.0`：语法高亮
 
-目标：预览里的代码按语言上色，读代码更快。Mac 侧栏预览、Mac「在窗口打开」和 iPhone 文件页共用 `mountPreview`，一处改动三处生效。状态：待设计评审。
+目标：预览里的代码按语言上色，读代码更快。Mac 侧栏预览、Mac「在窗口打开」和 iPhone 文件页共用 `mountPreview`，一处改动三处生效。状态：设计评审 1 轮（Codex gpt-6.1-sol high）通过，没有 P0、P1；4 条 P2、1 条 P3 已改入本节。
 
 ### 15.1 已定事项（作者定）
 
@@ -623,7 +623,7 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 ### 15.3 认语言（新增 `view/languages.mjs`）
 
 - 一张表：文件名（小写）优先，再按扩展名（小写），得到 highlight.js 的语言 id；都不在表里返回 `null`，显示纯文本。
-- 「先整名、后扩展名、点开头的名字没有扩展名」这套查找现在写在 `icons.mjs` 的 `kindOf` 里。抽成一个共用函数，图标表和语言表各用一份数据、同一套查找，不复制逻辑。图标的种类比语言粗（`c` 包括 C++，`code` 是杂项），所以两张表不合并。
+- 「先整名、后扩展名」这套查找现在写在 `icons.mjs` 的 `kindOf` 里。抽成一个共用函数，图标表和语言表各用一份数据、同一套查找，不复制逻辑。共用函数保持现有语义：扩展名取最后一个点之后，只有点的位置大于 0 才算（`.config.json` 的扩展名是 `json`，`.ts` 没有扩展名）。`.env.*` 的特判是图标自己的规则，留在 `kindOf` 里，排在整名之后、扩展名之前，不进共用函数。图标的种类比语言粗（`c` 包括 C++，`code` 是杂项），所以两张表不合并。
 - 表的内容：
 
 | 语言 id | 文件名 / 扩展名 |
@@ -644,15 +644,16 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 | `diff` `graphql` | `diff` `patch`；`graphql` `gql` |
 
 - 不在表里的照旧纯文本，例如 `txt`、`log`、`.env`、`sass`、`fish`、`erb`。`svg` 是图片，走图片预览。
+- 已知的近似：`.h` 一律按 C++，`.m` 一律按 Objective-C（MATLAB 文件会认错）；`.vue` 按 XML，模板插值不上色，`<script lang="ts">` 按 JavaScript，样式块按 CSS。高亮不是语法检查，这些近似可以接受，README 不宣称完整支持。
 - 测试断言表里每个 id 在打包的构建里都能 `getLanguage()` 到，避免表里写了没打包的语言。
 
 ### 15.4 显示（新增 `view/highlight.mjs`，改 `view/preview.mjs`）
 
 - **流程**：`show()` 显示文本时，语言认得出、内容不超过上限，就同步高亮，再放进 `pre.text`；否则照旧放纯文本。高亮在 `show()` 里一次完成，不分两次画，也没有新的异步状态。
-- **放进页面**：不用 `innerHTML`。highlight.js 的输出只有 `<span class="…">`、`</span>` 和 5 种转义（`&amp;` `&lt;` `&gt;` `&quot;` `&#x27;`）。`view/highlight.mjs` 严格按这个格式解析，用 `h()` 建出 `span` 和文本节点。遇到格式外的内容按「没能高亮」处理：显示纯文本，元信息注明「没能高亮」。这是外部库的边界，所以要校验。这样做的好处：文件内容绝不会被当成 HTML；测试用的 DOM 替身不用加 HTML 解析。
+- **放进页面**：不用 `innerHTML`。highlight.js 的输出只有 `<span class="…">`、`</span>` 和 5 种转义（`&amp;` `&lt;` `&gt;` `&quot;` `&#x27;`）。`view/highlight.mjs` 严格按这个格式解析，用 `h()` 建出 `span` 和文本节点。类名允许字母、数字、`-`、`_`，空格分隔多个，包括内嵌语言产生的 `language-javascript` 这类；实体只解码一次；标签必须配对、输出必须完整消费。highlight.js 的 safe mode 会吞掉内部错误，返回合法的纯文本转义并带上 `errorRaised`，所以失败有三种：调用抛错、结果带 `errorRaised`、输出不合格式。三种都按「没能高亮」处理：显示纯文本，元信息注明「没能高亮」。输出里没有 `span` 不算失败（空文件、只有普通标识符的文件）。这是外部库的边界，所以要校验；只包住库调用和解析这两步，`show()` 其他地方的错误照常抛出。这样做的好处：文件内容绝不会被当成 HTML；测试用的 DOM 替身不用加 HTML 解析。
 - **调用参数**：`hljs.highlight(text, { language, ignoreIllegals: true })`。`ignoreIllegals` 让语法不完整的文件（截断、写到一半）也能出结果。
-- **不变量**：高亮后 `pre.text.textContent === result.text`。选中文字加到聊天（`clippedSelection`、`linesOf`）靠这一点，它们本来就用 `Range`，嵌套的 `span` 不影响。
-- **上限**：`HIGHLIGHT_LIMIT = 256 KiB`，按读到的字节数算，只定义在 `view/highlight.mjs`。依据是 2026-11-06 本机 Chrome 实测（高亮加放进页面加排版，用的是 `innerHTML`，正式实现要重测）：
+- **不变量**：高亮后 `pre.text.textContent === result.text`（解码后的字符串，不是原始字节）。CRLF、单独的 `\r`、NUL 都原样保留，这也是不用 `innerHTML` 的原因之一：HTML 解析会规范化这些字符。选中文字加到聊天（`clippedSelection`、`linesOf`）靠这一点，它们本来就用 `Range`，嵌套的 `span` 不影响。
+- **上限**：`HIGHLIGHT_LIMIT = 256 KiB`，按读到的字节数 `result.bytes.length` 算，只定义在 `view/highlight.mjs`。依据是 2026-11-06 本机 Chrome 实测（高亮加放进页面加排版，用的是 `innerHTML`，正式实现要重测）：
 
 | 大小 | JS | JSON |
 |---|---|---|
@@ -661,7 +662,7 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 | 512 KiB | 197 ms | 189 ms |
 | 1 MiB | 367 ms | 316 ms |
 
-  iPhone 按慢 2～3 倍估，256 KiB 约 0.2～0.3 秒。验收时用正式实现重测 256 KiB；Mac Chrome 上超过 150 ms 就把上限降到 128 KiB，并写进 PR 说明。
+  iPhone 按慢 2～3 倍估，256 KiB 约 0.2～0.3 秒。token 密度对耗时影响很大（评审在 Node 里量到，256 KiB 的密集 JSON 光高亮就约 133 ms，标记串约 5 MB），所以验收用正式实现重测四种固定样本，每种都是 256 KiB：普通 JS、密集 JSON、多字节文本、一整行的长文件。计时从调用库开始，包括解析、放进页面和强制排版，首次打开和重复打开各报一次。任何一种在 Mac Chrome 上超过 150 ms，就把上限降到 128 KiB 再测一遍，并写进 PR 说明。
 
 - **元信息**：超过上限的，在现有那一行末尾加「不高亮」，例如 `lib · 9,812 行 · 410 KiB · 不高亮`。超过 1 MiB 的已经有「只显示前 1 MiB」，合成「只显示前 1 MiB，不高亮」。认不出语言的不加说明。
 - **刷新**：文件没变不重画（现状）；变了就重新高亮，滚动位置照旧保留。
@@ -672,11 +673,12 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 - 定义 `--hl-*` 一组：`keyword`、`string`、`comment`、`number`（含 `literal`）、`title`（函数、类名）、`type`（含 `built_in`）、`attr`（含 `property`）、`meta`（预处理、装饰器）、`tag`（含 `name`）、`variable`、`regexp`、`addition`、`deletion`、`section`（Markdown 标题）。`.coda-dark` 下换一组。highlight.js 的其他类不上色，用正文颜色。
 - 规则只写在 `.code .text` 下面。highlight.js 自带的主题文件不打包。
 - 第 9 节第 1 条改为：类型图标的 `--tone-*` 和高亮的 `--hl-*` 是两个例外。
-- 对比度：每个 `--hl-*` 在代码区实际底色上不低于 4.5:1，深浅两种外观都要。harness 读计算值检查，和第 13.9 节的图标检查同一做法。真实客户端的底色要真机确认。
+- 对比度：不低于 4.5:1，深浅两种外观都要。harness 检查的是实际 token 的最终颜色，不是变量值：对每个上色的类和嵌套组合（如内嵌 JS 里的字符串）各放一个样本，读 `getComputedStyle(...).color`，和代码区的有效底色（含透明色合成）算 WCAG 对比度，不先四舍五入。这样连选择器没接上、嵌套继承被覆盖也能查出来。真实客户端的底色要真机确认。
 
 ### 15.6 给 `0.8.0` 文件内查找留的位置
 
 - 查找打算用 CSS Custom Highlight API：对文本节点建 `Range`，用 `::highlight()` 标出匹配处。它不改 DOM，跨过高亮的 `span` 也没问题，所以这一版的 `span` 结构不用为查找改。
+- 刷新换了正文之后，查找要重建 `Range`，这是 `0.8.0` 的事。
 - 这一版要守住两条，查找才能直接叠上去：`pre.text` 里只有 `span` 和文本节点，不加按行包裹之类的节点；`textContent` 和原文一致（第 15.4 节的不变量）。
 - 未验证：Coda 的 WKWebView 是否支持这个 API（Safari 17.2 起支持）。写 `0.8.0` 设计时先查，不支持再定退路。这一版不为它写代码。
 
@@ -685,7 +687,7 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 | 问题 | 选项 | 倾向 |
 |---|---|---|
 | 高亮结果怎么放进页面 | A. 解析输出，用 `h()` 建节点；B. `innerHTML`，再给测试的 DOM 替身加 HTML 解析 | A：文件内容不经过 HTML 解析，测试基建也不变重。代价是建节点可能比 `innerHTML` 慢，按第 15.4 节的门槛实测 |
-| 库什么时候加载 | A. 静态导入，页面启动就解析约 130 KiB；B. 打开第一个可高亮的文件时 `import()` | A：没有新的异步状态和取消路径。harness 量一次侧栏启动多花的时间，写进 PR 说明；Mac Chrome 上超过 30 ms 再改 B |
+| 库什么时候加载 | A. 静态导入，页面启动就解析约 130 KiB；B. 打开第一个可高亮的文件时 `import()` | A：没有新的异步状态和取消路径。harness 量侧栏启动多花的时间，包括导入和注册全部额外语言，冷缓存和重复启动各一次，写进 PR 说明；Mac Chrome 上超过 30 ms 再改 B |
 | 用内置 36 种的构建还是只挑语言 | A. 内置构建加 3 个语言文件；B. 只打包核心和表里的语言，约 40 个文件 | A：文件少、升级简单，多出的几种语言（`wasm`、`vbnet` 等）只占体积，不进语言表 |
 
 ### 15.8 实施和验收
@@ -695,11 +697,12 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 验收：
 
 - `node --test test/*.test.mjs`，新增覆盖：
-  - 语言表：整名优先、扩展名、大小写、点开头的名字、认不出返回 `null`；表里每个 id 都能 `getLanguage()` 到；`versionString` 是 `11.12.0`；图标的种类判断抽出共用函数后结果不变（现有图标测试照过）。
-  - 解析：嵌套 `span`、多个类名（如 `hljs-title function_`）、5 种转义；格式外的内容走「没能高亮」；`textContent` 等于原文，样例包括 `<script>`、`<img onerror=…>`、字面的 `&lt;`、CRLF、制表符、emoji 和代理对、空文件、末尾有无换行。
-  - 预览：认得出的语言出 `span`，认不出的纯文本；超过上限显示纯文本并注明；超过 1 MiB 的合并说明；没变不重画，变了重新高亮且滚动位置保留；高亮后选中文字加到聊天，内容和行号都对；图片和二进制不受影响。
+  - 语言表：整名优先、扩展名、大小写、点开头的名字、认不出返回 `null`；`.env.json`、`.config.json`、`.ts` 在语言表和图标表里各自的结果；表里每个 id 都能 `getLanguage()` 到（三个额外语言要先 `registerLanguage`）；`versionString` 是 `11.12.0`；图标的种类判断抽出共用函数后结果不变（现有图标测试照过）。
+  - 解析：嵌套 `span`、多个类名（如 `hljs-title function_`）、内嵌语言（`language-javascript`）、5 种转义；三种失败（抛错、`errorRaised`、格式外的内容）都走「没能高亮」，没有 `span` 的正常输出不算失败；`textContent` 等于原文，样例包括 `<script>`、`<img onerror=…>`、字面的 `&lt;`、CRLF、单独的 `\r`、NUL、制表符、emoji、未配对的代理项、空文件、末尾有无换行。
+  - 预览：认得出的语言出 `span`，认不出的纯文本；超过上限显示纯文本并注明，上限前一字节、恰好上限、后一字节三种都测；超过 1 MiB 的合并说明；没变不重画，变了重新高亮且滚动位置保留；高亮后选中文字加到聊天，内容和行号都对；图片和二进制不受影响。
 - 通过 `npm run check:coda`；边界测试照常扫到 `view/vendor/`。如果压缩文件引起误报，只对这个目录加有理由的例外，写进测试注释。
-- `node test/harness/layout.mjs`（不用固定睡眠后断言）：Mac 侧栏、Mac 窗口、iPhone 文件页，深浅两种外观各一张高亮截图；高亮前后行号列和正文的高度一致（行对齐）；每个 `--hl-*` 的对比度；造 256 KiB 的文件量打开耗时；侧栏启动多花的时间。
+- `node test/harness/layout.mjs`（不用固定睡眠后断言）：Mac 侧栏、Mac 窗口、iPhone 文件页，深浅两种外观各一张高亮截图；高亮前后行号列和正文的高度一致（行对齐）；按第 15.5 节检查对比度；第 15.4 节的四种样本量打开耗时；侧栏启动多花的时间（冷、热各一次）。
+  - 真实选区（Mac）：在可高亮的文件上用真实 `Range` 选中后右键加到聊天，断言内容和行号。场景：起点和终点落在不同 token、嵌套 `span` 里、跨行、从行号列拖进来、结尾在下一行行首。原来的纯文本 `notes.txt` 用例保留。
 - PR 说明写：256 KiB 的打开耗时、启动多花的时间、包体积的变化。
 - 作者真机确认：两端深浅配色的观感；iPhone 上打开 256 KiB 左右的文件是否卡；选中文字加到聊天照常。
 
