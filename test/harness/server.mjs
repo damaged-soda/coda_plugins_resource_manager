@@ -107,7 +107,7 @@ addEventListener('message', e => { if (e.data?.harness === 'copy') log('copy: ' 
     onclick: () => f.contentWindow.postMessage({ harness: 'toolbar', id: i.id }, '*') }))); });
 </script>`;
 
-const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.css': 'text/css' };
+const types = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css' }; // .js：view/vendor/ 下原样复制的 highlight.js 是 .js 文件，浏览器要求模块脚本是 JavaScript 类型
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const send = (status, body, type = 'text/plain') => { res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store' }); res.end(body); };

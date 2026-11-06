@@ -42,7 +42,8 @@ export class Model {
   dirs = new Map(); // path → { entries, next, loaded, loading, error, token }
   expanded = new Set(); // 不变量：展开的目录，它的每一级上层也展开
   wanted = new Map(); // 恢复状态时各目录要取够的条数，第一次取用后删掉
-  selected = null;
+  selected = null; // 选中的条目（高亮和键盘移动用，文件夹、不能打开的条目都可以）
+  opened = null; // Mac 侧栏预览中的文件；iPhone 一直是 null
   showHidden = false;
   sort = DEFAULT_SORT; // 全局一份，由页面存进 persisted
   view = View.LIST; // 全局一份，由页面存进 persisted
@@ -88,6 +89,7 @@ export class Model {
     const paths = (saved?.expanded ?? []).filter(path => path !== '');
     this.expanded = new Set(paths.filter(path => !path.includes('/') || paths.includes(path.slice(0, path.lastIndexOf('/')))));
     this.selected = saved?.selected ?? null;
+    this.opened = saved?.opened ?? null;
     this.onChange();
   }
 
@@ -110,6 +112,7 @@ export class Model {
     this.scope++;
     this.#nav++;
     this.cwd = '';
+    this.selected = this.opened = null;
     this.#quiet = false;
     this.wanted = new Map();
   }
@@ -279,7 +282,15 @@ export class Model {
     }
   }
 
-  select(path) { this.selected = path; this.onChange(); }
+  // 选中只影响高亮，不发 onChange：重画会换掉全部行节点，双击的第二下点击之后 dblclick 就丢了。页面的 selectEntry 负责切高亮和保存。返回是不是变了。
+  select(path) {
+    if (this.selected === path) return false;
+    this.selected = path;
+    return true;
+  }
+  // Mac 打开文件：选中它并切到预览。返回（closeFile）只清 opened，选中留着。
+  openFile(path) { this.selected = this.opened = path; this.onChange(); }
+  closeFile() { this.opened = null; this.onChange(); }
   setShowHidden(on) { this.showHidden = on; this.onChange(); }
   // loaded：取过不止一页的目录已加载的条数，只存条数不存内容；第一页每次都会重新取，不用存。
   snapshot() {
@@ -287,7 +298,7 @@ export class Model {
     for (const [path, dir] of this.dirs) if (dir.pages > 1 && dir.entries.length > 0) loaded[path] = dir.entries.length;
     // 还没收到这个会话就绪的 root 时，cwd 和根目录还是保存的那一份，原样存回去，不能被重建途中的一次保存冲掉。
     const root = this.#resolved ? this.#rootPath : this.#savedRoot;
-    return { expanded: [...this.expanded], selected: this.selected, loaded, cwd: this.cwd, ...(root === null ? {} : { root }) };
+    return { expanded: [...this.expanded], selected: this.selected, opened: this.opened, loaded, cwd: this.cwd, ...(root === null ? {} : { root }) };
   }
 }
 
@@ -317,6 +328,8 @@ export function parseState(raw) {
     state.sessions[id] = {
       at: Number.isSafeInteger(item.at) ? item.at : 0, expanded: strings(item.expanded, 5000),
       selected: typeof item.selected === 'string' && item.selected.length <= 1024 ? item.selected : null,
+      // 0.6.0 的状态没有 opened：selected 只当选中，不打开预览。
+      opened: typeof item.opened === 'string' && item.opened.length <= 1024 ? item.opened : null,
       // 滚动位置是按当时的排序存的；旧版本没有这个字段，那时一定是默认排序。
       // 两种视图各存各的位置和当时的排序：tree 和 sort 是列表的，grid 和 gridSort 是图标的（旧版本没有后两个）。
       scroll: { tree: num(scroll.tree), top: num(scroll.top), left: num(scroll.left), sort: parseSort(scroll.sort) ?? DEFAULT_SORT,

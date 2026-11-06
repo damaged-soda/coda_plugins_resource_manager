@@ -10,6 +10,8 @@ import { checkoutOf, deferred, fakeCoda, tempDir, waitFor } from './support/fake
 const body = page => page.grid.find(node => node.classList.contains('gbody'))[0];
 const names = page => page.grid.find(node => node.classList.contains('gi')).map(node => node.textContent);
 const cell = (page, name) => page.grid.find(node => node.classList.contains('cell') && node.textContent === name)[0];
+// Mac：一次完整的双击（浏览器的事件顺序：两次 click，再 dblclick）。
+const dbl = node => { node.dispatch('click'); node.dispatch('click'); node.dispatch('dblclick'); };
 const head = page => page.grid.find(node => node.classList.contains('ghead'))[0];
 
 async function mountGrid(t, fake, { platform = 'mac', state, saved = [], back } = {}) {
@@ -40,10 +42,10 @@ test('真实模块：单击文件夹列出它的内容，Mac 头部返回回到�
   const { page } = await mountGrid(t, fake, { state: iconsState });
   await waitFor(() => names(page).includes('top.txt'), '根目录的图标');
   assert.deepEqual(names(page), ['sub', 'top.txt']);
-  cell(page, 'sub').dispatch('click');
+  dbl(cell(page, 'sub'));
   await waitFor(() => names(page).includes('inner.txt'), '进入 sub');
   assert.deepEqual(names(page), ['deeper', 'inner.txt']);
-  cell(page, 'deeper').dispatch('click');
+  dbl(cell(page, 'deeper'));
   await waitFor(() => names(page).includes('deep.txt'), '进入 sub/deeper');
   assert.equal(head(page).find(node => node.classList.contains('gname-head'))[0].textContent, 'deeper');
   head(page).children[0].dispatch('click');
@@ -62,9 +64,9 @@ test('真实模块：目录被删之后刷新，模块回答 not_found，回到�
   activate(fake.coda);
   const { page } = await mountGrid(t, fake, { state: iconsState });
   await waitFor(() => names(page).includes('sub'), '根目录');
-  cell(page, 'sub').dispatch('click');
+  dbl(cell(page, 'sub'));
   await waitFor(() => names(page).includes('deeper'), 'sub');
-  cell(page, 'deeper').dispatch('click');
+  dbl(cell(page, 'deeper'));
   await waitFor(() => names(page).includes('空目录'), 'sub/deeper');
   await rm(join(root, 'sub', 'deeper'), { recursive: true });
   page.bar.find(node => node.tagName === 'BUTTON' && node.textContent === '刷新')[0].dispatch('click');
@@ -82,10 +84,10 @@ test('真实模块：iPhone 单击文件走 coda.open，重建页面后用保存
   const saved = [];
   const first = await mountGrid(t, fake, { platform: 'ios', state: iconsState, saved, back: true });
   await waitFor(() => names(first.page).includes('sub'), '根目录');
-  cell(first.page, 'sub').dispatch('click');
+  dbl(cell(first.page, 'sub'));
   await waitFor(() => names(first.page).includes('inner.txt'), 'sub');
   assert.deepEqual(first.calls.back.at(-1), ['repo']);
-  cell(first.page, 'inner.txt').dispatch('click');
+  dbl(cell(first.page, 'inner.txt'));
   await waitFor(() => saved.length > 0, '打开文件前保存');
   const second = await mountGrid(t, fake, { platform: 'ios', state: saved.at(-1), back: true });
   await waitFor(() => names(second.page).includes('inner.txt'), '重建后回到 sub');

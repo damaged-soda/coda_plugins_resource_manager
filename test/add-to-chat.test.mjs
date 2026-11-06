@@ -25,13 +25,13 @@ const b64 = text => Buffer.from(text).toString('base64');
 
 // ---- 行菜单 ----
 
-test('行菜单：添加到聊天、复制相对路径、复制绝对路径、分隔线、属性，顺序固定，文件和文件夹一样', async t => {
+test('行菜单（Mac）：打开（文件夹写展开）、分隔线、添加到聊天、复制相对路径、复制绝对路径、分隔线、属性，顺序固定', async t => {
   const { page } = await start(t, { platform: 'mac' });
-  for (const name of ['a.txt', 'src', 'in.txt']) {
+  for (const [name, first] of [['a.txt', '打开'], ['src', '展开'], ['in.txt', '打开']]) {
     rightClick(page, name);
-    assert.deepEqual(labels(page), ['添加到聊天', '复制相对路径', '复制绝对路径', '属性'], name);
+    assert.deepEqual(labels(page), [first, '添加到聊天', '复制相对路径', '复制绝对路径', '属性'], name);
     const shape = page.menu.children.map(node => node.tagName);
-    assert.deepEqual(shape.slice(shape.indexOf('BUTTON')), ['BUTTON', 'BUTTON', 'BUTTON', 'HR', 'BUTTON'], '三项、分隔线、属性');
+    assert.deepEqual(shape.slice(shape.indexOf('BUTTON')), ['BUTTON', 'HR', 'BUTTON', 'BUTTON', 'BUTTON', 'HR', 'BUTTON'], '打开、分隔线、三项、分隔线、属性');
   }
 });
 
@@ -125,7 +125,7 @@ test('复制相对路径、复制绝对路径照旧', async t => {
 
 async function previewOf(t, text = FILE_TEXT, options) {
   const ctx = await start(t, { platform: 'mac', ...options });
-  rowNamed(ctx.page, 'a.txt').dispatch('click');
+  rowNamed(ctx.page, 'a.txt').dispatch('dblclick'); // Mac：双击打开
   const [read] = await ctx.host.requests('read');
   ctx.host.answer(read, { data: b64(text), offset: 0, size: Buffer.byteLength(text), mtimeMs: 1, kind: 'text', eof: true });
   await flush();

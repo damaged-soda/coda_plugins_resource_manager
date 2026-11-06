@@ -1,5 +1,5 @@
 /* 资源管理器的页面，颜色、字体、字号只用 App 给的 --coda-* 变量（插件视图的主题变量）。
-   唯一的例外是下面的 --tone-*：种类图标的色调，主题变量里没有这一组。 */
+   两个例外是下面的 --tone-*（种类图标的色调）和 --hl-*（代码高亮），主题变量里没有这两组。 */
 :root {
   --hover: var(--coda-hover, var(--coda-fill, rgba(0,0,0,.05)));
   --line: var(--coda-separator, rgba(0,0,0,.1));
@@ -10,6 +10,8 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
   font: var(--coda-font-size, 13px)/1.45 var(--coda-font, -apple-system, system-ui, sans-serif);
   color: var(--coda-foreground, #1d1d1f); background: transparent;
+  /* iOS WebKit 会自动放大文字，上色后正文是许多 span，被放大而行号列不放大，两列对不齐；整页关掉，字号只按 --coda-font-size。 */
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 /* 种类图标的色调。图标是 currentColor，.tone-* 把颜色给到 svg 上；文件夹用强调色，链接和特殊文件没有色调，跟随三级文字色。
    两种外观下，在 --coda-background 和 --coda-card 上的对比度都不低于 3:1（harness 读真实计算值检查）；改色值要重新跑。 */
@@ -20,6 +22,15 @@
 :root.coda-dark {
   --tone-gray: #a3a3a9; --tone-blue: #6aa9ec; --tone-yellow: #e3b63e; --tone-green: #63c77f; --tone-teal: #58c3dd;
   --tone-orange: #f0964f; --tone-red: #f0717a; --tone-purple: #ac87ec; --tone-pink: #ee77ac;
+}
+/* 代码高亮的颜色，深浅各一套；自己定的，不照搬任何现成主题。每个 token 的最终颜色在代码区底色上不低于 4.5:1（harness 读真实计算值检查）；改色值要重新跑。 */
+:root {
+  --hl-keyword: #a2218f; --hl-string: #b82a1f; --hl-comment: #5f6b76; --hl-number: #2d3fc4; --hl-title: #0b62a0; --hl-type: #1b7280; --hl-attr: #7a5200;
+  --hl-meta: #8a4710; --hl-tag: #a02a5c; --hl-variable: #5a45b8; --hl-regexp: #9a3b00; --hl-addition: #1a7a2c; --hl-deletion: #c0262d; --hl-section: #0b5ca8;
+}
+:root.coda-dark {
+  --hl-keyword: #f58ac0; --hl-string: #f59a85; --hl-comment: #8f9ca8; --hl-number: #dcc46c; --hl-title: #62c0e8; --hl-type: #72d4d0; --hl-attr: #d8b46a;
+  --hl-meta: #f0a070; --hl-tag: #f58aa8; --hl-variable: #b3a4f5; --hl-regexp: #e6b27a; --hl-addition: #6fd185; --hl-deletion: #ff8a8f; --hl-section: #7cb8f5;
 }
 .tone-accent { color: var(--coda-accent, #0a84ff); }
 .tone-gray { color: var(--tone-gray); } .tone-blue { color: var(--tone-blue); } .tone-yellow { color: var(--tone-yellow); }
@@ -107,10 +118,28 @@ button.icon svg { display: block; }
 .gutter { position: sticky; left: 0; flex: none; padding: 6px 8px 6px 12px; text-align: right; background: var(--coda-background, #fff);
   color: var(--coda-tertiary, #a1a1a6); -webkit-user-select: none; user-select: none; }
 .text { flex: 1 0 auto; padding: 6px 12px 6px 4px; tab-size: 4; }
+/* 高亮只设 color：不改字重、斜体、背景、字号，行高和行号对齐不变。highlight.js 的其他类不上色。 */
+.code .text .hljs-keyword { color: var(--hl-keyword); }
+.code .text .hljs-string { color: var(--hl-string); }
+.code .text .hljs-comment { color: var(--hl-comment); }
+.code .text .hljs-number, .code .text .hljs-literal { color: var(--hl-number); }
+.code .text .hljs-title { color: var(--hl-title); }
+.code .text .hljs-type, .code .text .hljs-built_in { color: var(--hl-type); }
+.code .text .hljs-attr, .code .text .hljs-property, .code .text .hljs-attribute { color: var(--hl-attr); }
+.code .text .hljs-meta { color: var(--hl-meta); }
+.code .text .hljs-tag, .code .text .hljs-name, .code .text .hljs-selector-tag, .code .text .hljs-selector-class, .code .text .hljs-selector-id, .code .text .hljs-selector-pseudo, .code .text .hljs-selector-attr { color: var(--hl-tag); }
+.code .text .hljs-variable { color: var(--hl-variable); }
+.code .text .hljs-regexp { color: var(--hl-regexp); }
+.code .text .hljs-addition { color: var(--hl-addition); }
+.code .text .hljs-deletion { color: var(--hl-deletion); }
+.code .text .hljs-section { color: var(--hl-section); }
 .image { display: grid; place-items: start center; padding: 12px; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
-#notice:focus { outline: none; }
+#notice:focus, #preview:focus { outline: none; }
+/* 键盘焦点：选中的高亮已经表示位置，点击时不画外框；只在键盘操作（:focus-visible）时给容器内边一圈细线。 */
+#tree:focus, .gbody:focus { outline: none; }
+#tree:focus-visible, .gbody:focus-visible { outline: 1px solid var(--coda-accent, #0a84ff); outline-offset: -2px; }
 .menu { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - var(--safe-left) - var(--safe-right) - 8px)); padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff));
   /* 高度有上限：内容多（长路径加五项）时在菜单里滚动，不超出安全区；位置由 menu.mjs 夹在安全区内。 */
@@ -127,7 +156,7 @@ button.icon svg { display: block; }
 .menu-path { padding: 4px 8px 6px; overflow-wrap: anywhere; }
 .menu-info { padding: 0 8px 6px; margin-top: -4px; white-space: nowrap; }
 .menu-sep { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
-.menu-head { padding: 4px 8px 2px; font-weight: 600; }
+.menu-head { display: flex; align-items: center; gap: 4px; padding: 4px 8px 2px; font-weight: 600; } /* 和 .menu button 同样的 flex 与 gap，空位用 .check */
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
 /* 底部的短提示：普通的是前景色（成功），.warn 是橙色（失败）。 */

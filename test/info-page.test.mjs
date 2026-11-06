@@ -60,7 +60,7 @@ test('进入：菜单里点「属性」，属性页盖住目录树，Mac 不声�
 
 test('子目录里的文件：位置是它所在的相对目录', async t => {
   const ctx = await start(t);
-  rowNamed(ctx.page, 'src').dispatch('click');
+  rowNamed(ctx.page, 'src').dispatch('dblclick');
   await flush();
   ctx.host.listing.src = ['app.ts'];
   ctx.host.changed();

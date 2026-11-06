@@ -91,6 +91,16 @@ test('恢复带 selected 的状态：iPhone 不进预览模式，Mac 仍进预�
   assert.equal(ios.host.sent.filter(m => m.type === 'read').length, 0);
   assert.equal(ios.host.calls.open.length, 0, '恢复不会自己打开文件');
 
+  // Mac：只有 opened 才进预览；0.6.0 存的状态只有 selected，当作选中，不打开预览。
+  const old = await open(t, { platform: 'mac', state });
+  old.host.session();
+  await flush();
+  assert.ok(visible(old.page.tree));
+  assert.equal(visible(old.page.preview), false);
+  assert.ok(row(old.page, 'f2.txt').classList.contains('sel'));
+  assert.equal(old.host.sent.filter(m => m.type === 'read').length, 0);
+
+  state.sessions.s1.opened = 'f2.txt';
   const mac = await open(t, { platform: 'mac', state });
   mac.host.session();
   await flush();
@@ -98,14 +108,17 @@ test('恢复带 selected 的状态：iPhone 不进预览模式，Mac 仍进预�
   assert.equal(visible(mac.page.tree), false);
 });
 
-test('Mac：点文件仍进预览，头部「窗口」按钮用同样的 args 打开文件视图；失败有提示', async t => {
+test('Mac：双击文件进预览，头部「窗口」按钮用同样的 args 打开文件视图；失败有提示', async t => {
   const { page, host } = await open(t, { platform: 'mac' });
   host.session();
   await flush();
   row(page, 'f1.txt').dispatch('click');
   await flush();
+  assert.equal(visible(page.preview), false, '单击只选中');
+  row(page, 'f1.txt').dispatch('dblclick');
+  await flush();
   assert.ok(visible(page.preview));
-  assert.equal(host.calls.open.length, 0, '点文件本身不开窗口');
+  assert.equal(host.calls.open.length, 0, '打开文件本身不开窗口');
   for (const label of ['窗口', '复制路径']) {
     const icon = button(page.preview, label);
     assert.equal(icon.getAttribute('aria-label'), label);

@@ -67,7 +67,7 @@ test('页面里：根目录和子目录的失败行都能点，点了重新取�
   const { page, host } = await openTree(t, { platform: 'mac', listing: { '': ['src/'], src: ['x.txt'] } });
   host.session();
   await flush();
-  rowNamed(page, 'src').dispatch('click');
+  rowNamed(page, 'src').dispatch('dblclick');
   await flush();
   host.failing.add('').add('src');
   host.changed();

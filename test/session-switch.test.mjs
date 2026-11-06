@@ -141,6 +141,7 @@ for (const platform of ['ios', 'mac']) {
     assert.equal(rowNamed(page, 'dir').getAttribute('aria-expanded'), 'false');
 
     click(page, 'dir');
+    if (platform === 'mac') rowNamed(page, 'dir').dispatch('dblclick'); // Mac 双击才展开
     await flush();
     assert.equal(rowNamed(page, 'dir').getAttribute('aria-expanded'), 'true', '下一次点击正常');
   });

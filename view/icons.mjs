@@ -1,5 +1,6 @@
 // 图标：页面里自己画的 SVG，形状近似 SF Symbol，不打包 Apple 的符号，也不用任何第三方素材。颜色都是 currentColor，由 CSS 定：
 // 种类图标带 tone-* 类（颜色见 style.css 的 --tone-*），没有色调的（工具条、菜单的图标）跟随所在位置的文字色。
+import { invert, lookupByName } from './lookup.mjs';
 import { EntryKind } from './protocol.mjs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -132,7 +133,6 @@ const EXTENSIONS = {
   database: ['db', 'sqlite', 'sqlite3'],
   font: ['ttf', 'otf', 'woff', 'woff2'],
 };
-const invert = table => new Map(Object.entries(table).flatMap(([id, keys]) => keys.map(key => [key, id])));
 const BY_NAME = invert(NAMES), BY_EXT = invert(EXTENSIONS);
 
 // 一个条目的种类：{ glyph, tone, label }。目录、链接、其他按种类；文件先按整个文件名，再按扩展名（点开头的名字没有扩展名）。
@@ -141,8 +141,7 @@ export function kindOf({ kind, name }) {
   if (kind === EntryKind.DIR) return KINDS.dir;
   if (kind === EntryKind.LINK) return KINDS.link;
   if (kind === EntryKind.OTHER) return KINDS.other;
-  const lower = String(name).toLowerCase(), dot = lower.lastIndexOf('.');
-  return KINDS[BY_NAME.get(lower) ?? (lower.startsWith('.env.') ? 'env' : undefined) ?? (dot > 0 ? BY_EXT.get(lower.slice(dot + 1)) : undefined) ?? 'file'];
+  return KINDS[lookupByName(name, BY_NAME, BY_EXT, lower => (lower.startsWith('.env.') ? 'env' : undefined)) ?? 'file'];
 }
 
 // 图标名：种类表里的 glyph。

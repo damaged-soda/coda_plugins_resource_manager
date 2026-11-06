@@ -59,7 +59,8 @@ async function open(t, { roots = {}, coda = {}, timers = true } = {}) {
 }
 
 const row = (page, name) => page.tree.find(node => node.classList.contains('row') && node.textContent.includes(name))[0];
-const openFile = async (page, name = FILE) => { row(page, name).dispatch('click'); await flush(); };
+// Mac：双击打开；单击只选中。
+const openFile = async (page, name = FILE) => { row(page, name).dispatch('click'); row(page, name).dispatch('dblclick'); await flush(); };
 const text = page => page.preview.find(node => node.classList.contains('text'))[0]?.textContent;
 const meta = page => page.preview.find(node => node.classList.contains('pmeta'))[0];
 // 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
@@ -74,16 +75,20 @@ async function previewing(t, options) {
   return ctx;
 }
 
-test('根目录换了位置（ready → ready）：大小和 mtimeMs 相同也显示新根目录的正文', async t => {
+test('根目录换了位置（ready → ready）：旧根目录下的选中和预览清掉，回到目录树，不读新根目录里同名的文件', async t => {
   const { page, host } = await previewing(t);
   host.roots['/B'] = tree('bbbbb');
+  const reads = host.reads().length;
   host.setRoot('ready', '/B');
   await flush();
-  assert.equal(text(page), 'bbbbb');
-  assert.ok(visible(page.preview));
+  assert.equal(visible(page.preview), false);
+  assert.equal(visible(page.tree), true);
+  assert.equal(text(page), undefined);
+  assert.equal(row(page, FILE).classList.contains('sel'), false, '选中清空');
+  assert.equal(host.reads().length, reads, '预览不再读');
 });
 
-test('根目录 ready → 其他 → ready：预览收起，恢复后读的是当前根目录', async t => {
+test('根目录 ready → 其他 → ready（换了位置）：预览收起，回来后是目录树，选中和预览都清空', async t => {
   const { page, host } = await previewing(t);
   host.setRoot('gone');
   await flush();
@@ -92,8 +97,9 @@ test('根目录 ready → 其他 → ready：预览收起，恢复后读的是�
   assert.equal(text(page), undefined);
   host.setRoot('ready', '/B');
   await flush();
-  assert.ok(visible(page.preview));
-  assert.equal(text(page), 'bbbbb');
+  assert.equal(visible(page.preview), false);
+  assert.equal(visible(page.tree), true);
+  assert.equal(text(page), undefined);
 });
 
 test('根目录没换位置：普通 root、changed 仍按元数据比较，没变就不重画正文', async t => {
@@ -155,10 +161,11 @@ test('setState 抛错：界面不受影响，下一次保存照常进行', async
   button(page.preview, '返回').dispatch('click'); // 再有一次变化，保存重试
   await flush();
   tick(300);
-  assert.equal(saved.at(-1).sessions.s1.selected, null);
+  assert.equal(saved.at(-1).sessions.s1.opened, null, '返回清掉 opened');
+  assert.equal(saved.at(-1).sessions.s1.selected, FILE, '选中留着');
   await openFile(page);
   tick(300);
-  assert.equal(saved.at(-1).sessions.s1.selected, FILE);
+  assert.equal(saved.at(-1).sessions.s1.opened, FILE);
   assert.equal(text(page), 'aaaaa');
 });
 
@@ -295,7 +302,7 @@ test('说明区重画后焦点不丢到页面外：重试按钮聚焦时点它�
   assert.equal(document.activeElement, button(page.notice, '重试'), '再次失败，焦点落在新的重试按钮上');
 });
 
-test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录树：滚动位置在，选中清掉，焦点落在目录树', async t => {
+test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录树：滚动位置在，选中的文件还在，焦点落在目录树', async t => {
   const { page } = await previewing(t);
   const head = page.preview.find(node => node.classList.contains('phead'))[0];
   const back = button(page.preview, '返回');
@@ -312,6 +319,10 @@ test('Mac 预览头部最左边有「返回」图标按钮，点了回到目录�
   assert.equal(page.tree.scrollTop, 321);
   assert.equal(page.tree.inert, false);
   assert.equal(globalThis.document.activeElement, page.tree, '焦点不丢到页面外');
+  page.tree.scrollTop = 0;
+  page.tree.dispatch('scroll');
+  assert.ok(row(page, FILE).classList.contains('sel'), '返回后那个文件仍是选中的');
+  assert.equal(page.tree.tabIndex, 0, '返回不改容器的 tabIndex，Tab 顺序还在');
 });
 
 test('Mac 点返回时按钮没拿到焦点（Safari 点按钮不聚焦）：页面持有焦点，照样交给目录树', async t => {
@@ -361,7 +372,7 @@ test('Mac 返回后展开的目录、它的子项和滚动位置都在：先展�
   const { page, host } = await open(t, { roots: { '/A': { 'dir/inner.txt': { text: 'i' }, [FILE]: { text: 'aaaaa' } } } });
   host.session('s1');
   await flush();
-  row(page, 'dir').dispatch('click');
+  row(page, 'dir').dispatch('dblclick');
   await flush();
   assert.ok(row(page, 'inner.txt'), '展开后子项出现');
   page.tree.scrollTop = 10; // 假 DOM 不量高：滚得太远目录行会掉出窗口，取不到一行高的非零值
