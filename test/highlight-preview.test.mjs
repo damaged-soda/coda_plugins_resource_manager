@@ -42,7 +42,7 @@ test('上限：前一字节和恰好上限上色，后一字节显示纯文本�
 });
 
 test('上限按字节算，不按字符：多字节字符的文件字符数少、字节数超过上限就不高亮', async t => {
-  const body3 = `//${'你'.repeat(Math.floor(HIGHLIGHT_LIMIT / 3))}`; // 字符数不到上限，字节数超过
+  const body3 = `//${'你'.repeat(Math.ceil(HIGHLIGHT_LIMIT / 3))}`; // 字符数不到上限，字节数超过
   assert.ok(body3.length < HIGHLIGHT_LIMIT && Buffer.byteLength(body3) > HIGHLIGHT_LIMIT);
   const { page } = await start(t, { path: 'zh.js', files: { 'zh.js': { text: body3 } } });
   assert.equal(text(page).find(node => node.tagName === 'SPAN').length, 0);
