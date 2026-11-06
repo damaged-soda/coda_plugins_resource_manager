@@ -1,7 +1,8 @@
 // 文件视图的页面入口：读一个文件。会话和路径来自 coda.args（启动值），之后的变化走 context 事件；
 // 连接在 connection.mjs，预览在 preview.mjs，这里不创建目录树。设计见 docs/design/phase-2.md 第 7 节。
 // Mac 的独立窗口里选中文字右键可以添加到聊天（第 13.7 节）；iPhone 不接，用系统的选区菜单。
-import { EXIT, paintBar } from './bar.mjs';
+// iPhone 点文件在资源页里预览（第 16 节），不再进这个视图；别的入口仍可能在 iPhone 上打开它：没有工具条，靠系统返回离开。
+import { paintBar } from './bar.mjs';
 import { createChat } from './chat.mjs';
 import { connect } from './connection.mjs';
 import { mountHint } from './hint.mjs';
@@ -15,7 +16,7 @@ const coda = window.coda;
 const $ = id => document.getElementById(id);
 const quiet = fn => { try { return fn(); } catch { return undefined; } };
 const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac';
-const isIOS = coda.platform === 'ios'; // iPhone：复制路径在底部工具条，不在预览头部
+const isIOS = coda.platform === 'ios';
 
 // 参数里的会话和路径，形状不对按没有处理。
 const argsOf = args => ({
@@ -37,7 +38,7 @@ const hint = mountHint($('hint'));
 const menu = mountMenu($('menu'));
 const chat = createChat({ link: conn.link, copy: text => coda.copy(text), hint });
 const preview = mountPreview($('preview'), {
-  read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text), copyInHead: !isIOS,
+  read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
 });
 
@@ -70,7 +71,8 @@ function render() {
 function openPreview() {
   const { path } = want, scroll = restore;
   // 没有要恢复的位置就明确从头开始，不靠清空正文后滚动条自己归零。
-  preview.open(path, scroll ?? { top: 0, left: 0 }).then(() => { if (preview.path === path && restore === scroll) restore = null; });
+  // 位置真正用上才清；读取被刷新、重载作废时，预览自己让接替的那次读取接着用。
+  preview.open(path, scroll ?? { top: 0, left: 0 }).then(used => { if (used && preview.path === path && restore === scroll) restore = null; });
 }
 
 // 预览收起前记下滚动位置，恢复后接着用；内容还没到时 restore 还没用掉，不覆盖。
@@ -125,18 +127,13 @@ quiet(() => coda.on('context', ({ args }) => {
   schedule();
 }));
 
-// ---- 工具条：Mac 用 coda.toolbar；iPhone 在底部放返回（仅横屏）、刷新、复制路径；其他（harness）退成页内一条 ----
+// ---- 工具条：Mac 用 coda.toolbar；iPhone 没有；其他（harness）退成页内一条 ----
 const refresh = () => { conn.refresh(); preview.refresh(); };
-// 说明区下预览是关着的，复制的是启动值里的路径：模块不可用时也能把路径交给对话。
-const copyPath = () => (preview.path !== null ? preview.copyPath() : want.path !== null && coda.copy(want.path));
 const items = [{ id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' }];
 if (hasToolbar) {
   quiet(() => coda.toolbar(items));
   quiet(() => coda.on('toolbar', ({ id }) => { if (id === 'refresh') refresh(); }));
-} else {
-  const shown = isIOS ? [EXIT, { ...items[0], glyph: 'refresh' }, { id: 'copy', label: '复制路径', kind: 'button', glyph: 'copy' }] : items;
-  paintBar($('bar'), shown, id => (id === EXIT.id ? quiet(() => coda.close()) : id === 'copy' ? copyPath() : refresh()));
-}
+} else if (!isIOS) paintBar($('bar'), items, refresh);
 
 // ---- 阅读位置：setState 按视图和 args 隔离，每个文件自然分开 ----
 let saveTimer = null;

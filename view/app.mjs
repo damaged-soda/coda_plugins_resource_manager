@@ -19,13 +19,12 @@ const coda = window.coda;
 const $ = id => document.getElementById(id);
 const quiet = fn => { try { return fn(); } catch { return undefined; } };
 const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac';
-// iPhone 上打开文件推入新视图，树页不进预览模式；opened 一直是 null，selected 只用来高亮。
-// Mac 照 Finder：单击选中、双击打开，键盘接在目录树和图标视图的滚动容器上。
+// 两端都在资源页里打开文件、切到预览（第 16 节）：iPhone 轻点打开、系统返回关掉，Mac 照 Finder 单击选中、双击打开，键盘接在目录树和图标视图的滚动容器上。
 const isIOS = coda.platform === 'ios';
 
 let persisted = parseState(quiet(() => coda.getState()));
-// 恢复出来的预览滚动位置，等内容到了再用一次。目录树和图标视图的在 restore 里。
-let pending = { preview: null };
+// 恢复出来的预览滚动位置，等内容到了再用一次；path 是它属于的文件，opened 不是它了就作废。目录树和图标视图的在 restore 里。
+let pending = { preview: null, path: null };
 
 const conn = connect(coda, { handlers: { session: onSession, root: onRoot, changed: onChanged }, onStatus: () => schedule() });
 const model = new Model({ link: conn.link, onChange: () => schedule(), onLost: () => hint.show('文件夹已不存在', { warn: false }) });
@@ -59,7 +58,7 @@ const restore = createRestore(model, { tree, grid });
 const trail = createTrail();
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
-  actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
+  actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS, // iPhone 的复制路径在 ⋯ 菜单里
   back: isIOS ? null : closePreview,
   // 选中文字的右键菜单只有 Mac：iPhone 用系统的选区菜单。
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
@@ -75,35 +74,22 @@ const info = mountInfo($('info'), {
   back: nativeBack ? null : () => { backPressed = true; closeInfo(); },
 });
 
-// ---- 在独立视图里打开：iPhone 点文件，Mac 预览头部的「窗口」 ----
+// ---- 在独立视图里打开：Mac 预览头部的「窗口」 ----
 // 会话 ID 放进 args：被打开的视图 context.session 是 null。失败（含同步抛出）在原地提示。
-// iPhone 防连点：open 进行中、成功后推入动画的这一小段都忽略重复点击；失败立刻放开。
-// epoch 每换一次会话加一：旧会话的 open 结果回来时已经作废，不碰新会话的提示和防连点。
-let opening = false, unlockTimer = null, epoch = 0;
-const REOPEN_MS = 1000;
+// epoch 每换一次会话加一：旧会话的 open 结果回来时已经作废，不碰新会话的提示。
+let epoch = 0;
 function openInView(path) {
-  if (isIOS) opening = true;
   const mine = epoch;
   return Promise.resolve().then(() => coda.open({ view: 'file', args: { session: model.session, path } }))
-    .then(() => {
-      if (mine !== epoch) return;
-      hint.hide();
-      if (isIOS) { clearTimeout(unlockTimer); unlockTimer = setTimeout(() => { opening = false; }, REOPEN_MS); }
-    }, error => {
-      if (mine !== epoch) return;
-      opening = false;
-      hint.show(`打不开文件：${error?.message ?? '未知原因'}`);
+    .then(() => { if (mine === epoch) hint.hide(); }, error => {
+      if (mine === epoch) hint.show(`打不开文件：${error?.message ?? '未知原因'}`);
     });
 }
+// 两端都在页内打开：model.openFile 设 selected 和 opened，经 onChange 切到预览。iPhone 触屏没有键盘焦点，不交焦点；
+// 快速两次轻点：第一次已切到预览，目录树 .off 不接指针事件，第二次落不到条目上。
 function openFile(path) {
-  if (isIOS && opening) return; // 先于 select 和保存：被忽略的点击什么都不改
-  if (!isIOS) {
-    openPressed = true; // 用户打开的：render 把焦点交给预览面板
-    return model.openFile(path);
-  }
-  selectEntry(path);
-  saveNow(); // 视图随即卸载，这一刻的展开状态、条数和滚动位置先存下
-  openInView(path);
+  openPressed = !isIOS; // 用户在 Mac 上打开的：render 把焦点交给预览面板
+  model.openFile(path);
 }
 
 // ---- 渲染：同一批变化合并成一次 ----
@@ -131,7 +117,7 @@ function closePreview() {
 // 用户点了预览头部的返回：render 据此决定焦点要不要交给浏览区，别的模式变化不动焦点。
 let backPressed = false;
 let openPressed = false; // 用户打开了文件：同返回对称，页面持有焦点时 render 把焦点交给预览面板
-const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.opened !== null && !isIOS ? 'preview' : model.view === View.ICONS ? 'grid' : 'tree');
+const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.opened !== null ? 'preview' : model.view === View.ICONS ? 'grid' : 'tree');
 
 // 说明区只在内容变了才重画，免得重试按钮在点击中途被换掉。
 let noticeKey = null;
@@ -156,9 +142,12 @@ function render() {
   (model.view === View.ICONS ? grid : tree).render(); // 只画正在用的视图，另一个留着它的内容和滚动位置
   landed();
   restore.settle();
+  // 待恢复的位置只属于它那个文件：opened 清了或换成别的文件，位置作废。
+  if (pending.preview !== null && pending.path !== model.opened) pending.preview = null;
   if (current === 'preview' && preview.path !== model.opened) {
-    preview.open(model.opened, pending.preview);
-    pending.preview = null;
+    // 位置要等内容到了、真的设上才清：之前离开页面或换会话，saveNow 还存它。作废的读取不清，由接替它的读取用上。
+    const scroll = pending.preview;
+    preview.open(model.opened, scroll).then(used => { if (used && scroll !== null && pending.preview === scroll) pending.preview = null; });
   } else if ((browsing || current === 'notice') && preview.path !== null) preview.close(); // 属性页和预览一样只切可见性，不动别的面板的内容
   // 返回按钮随预览一起 inert，焦点会掉到页面外：用户刚点了返回、页面又持有焦点时交给目录树或网格。
   // 后台刷新、切会话、root 变化造成的切换不动焦点，免得抢走客户端输入框的焦点。
@@ -178,10 +167,10 @@ const toolbarItems = () => infoOpen ? [] : hasToolbar
     { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
     { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
   ];
-// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里；预览时标题是文件名，⋯ 里只有刷新和复制路径。
 // 属性页上只留返回：竖屏有原生导航栏，整条工具条不显示；横屏导航栏隐藏，页面自己给返回（显示与否都由 style.css 的横屏媒体查询决定）。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
-const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: model.ready ? dirTitle() : '' }, MORE];
+const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: !model.ready ? '' : mode() === 'preview' ? baseName(model.opened) : dirTitle() }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar() {
@@ -198,7 +187,10 @@ function syncToolbar() {
 // 原生按钮没有 DOM 元素可以当锚点：用一个固定在页面右上角的假锚点，同时也是「谁打开的菜单」的标记。
 const TOOLBAR = { getBoundingClientRect: () => ({ right: window.innerWidth, bottom: 0 }) };
 // 「更多」菜单的内容只写这一处，iPhone 的 ⋯ 和 Mac 的原生按钮共用：刷新、显示隐藏文件、「显示」›；「显示」里是视图和排序，当前项有对勾。
-const moreMenu = () => ({ items: [
+const moreMenu = () => isIOS && mode() === 'preview' ? { items: [
+  { label: '刷新', run: () => act('refresh') },
+  { label: '复制路径', run: () => preview.copyPath() }, // 相对路径
+] } : ({ items: [
   { label: '刷新', run: () => act('refresh') },
   { label: '显示隐藏文件', checked: model.showHidden, run: () => act('hidden') },
   { label: '显示', submenu: { items: [
@@ -368,13 +360,17 @@ function landed() {
 }
 
 // ---- 上一层：iPhone 用原生返回，路径只在这里声明 ----
-// 路径是上层的标题，由远到近，不含当前页：图标视图在 a/b 是 [根目录名, 'a']；列表视图没有。属性页多一层当前页：列表视图是 '资源管理器'，图标视图是当前目录名。
+// 路径是上层的标题，由远到近，不含当前页：图标视图在 a/b 是 [根目录名, 'a']；列表视图没有。属性页、预览各多一层当前页（要回到的那一页）：列表视图是 '资源管理器'，图标视图是当前目录名。
+// 预览开着是 opened 不为空、且根目录就绪；没就绪时页面是说明区，路径为空。
 // 标题是当前目录名：根目录是根目录名。
+const baseName = path => path.slice(path.lastIndexOf('/') + 1);
 const dirTitle = () => (model.cwd === '' || model.view !== View.ICONS ? rootName(model.root.path) : model.cwd.slice(model.cwd.lastIndexOf('/') + 1));
+const previewOpen = () => model.ready && model.opened !== null;
 function backPath() {
   const icons = model.view === View.ICONS && model.ready;
   const upper = icons && model.cwd !== '' ? [rootName(model.root.path), ...model.cwd.split('/').slice(0, -1)] : [];
-  return infoOpen ? [...upper, icons ? dirTitle() : '资源管理器'] : upper;
+  const here = icons ? dirTitle() : '资源管理器';
+  return [...upper, ...(infoOpen ? [here] : []), ...(previewOpen() ? [here] : [])];
 }
 let declared = [];
 // 路径没变不重复声明；force：客户端已经退了一层，路径没变也要重新告诉它现在在哪。
@@ -385,9 +381,12 @@ function declareBack(force = false) {
   declared = path;
   quiet(() => coda.back(path));
 }
-// 退 steps 层：先关属性页，再退图标视图的目录；返回是不是真的退了。横屏的返回和原生返回共用。
+// 退 steps 层：先关预览，再关属性页，再退图标视图的目录；返回是不是真的退了。横屏的返回和原生返回共用。
+// 没就绪时页面是说明区，看不见预览和目录层：不消耗它们（保存的 opened、cwd 不变），横屏的返回直接关视图。
 function goBack(steps) {
+  if (!model.ready) return false;
   let used = 0;
+  if (previewOpen() && steps > used) { model.closeFile(); used++; } // 走和 Mac 一样的 closeFile：opened 清，selected 留着
   if (infoOpen && steps > used) { closeInfo(); used++; }
   const levels = Math.min(steps - used, model.view === View.ICONS && model.cwd !== '' ? model.cwd.split('/').length : 0);
   if (levels > 0) { leaveDir(levels); used += levels; }
@@ -421,11 +420,9 @@ function onSession(data) {
   tree.reset();
   grid.reset();
   epoch++;
-  opening = false;
-  clearTimeout(unlockTimer);
   hint.hide();
   const saved = persisted.sessions[data.session] ?? null;
-  pending = { preview: saved?.opened ? { top: saved.scroll.top, left: saved.scroll.left } : null };
+  pending = saved?.opened ? { preview: { top: saved.scroll.top, left: saved.scroll.left }, path: saved.opened } : { preview: null, path: null };
   model.receive(data, saved);
   trail.clear();
   restore.clear();
@@ -442,7 +439,7 @@ function onRoot(data) {
   if (data.state !== RootState.READY || before?.path !== data.path) closeInfo(); // 属性页看的是旧根目录下的路径
   const scope = model.scope;
   const done = model.receive(data);
-  if (model.scope !== scope) invalidateScroll(); // 换了根目录（同根重建不算）：旧根目录的位置和记录不能给新的用
+  if (model.scope !== scope) { invalidateScroll(); pending.preview = null; } // 换了根目录（同根重建不算）：旧根目录的位置和记录不能给新的用，待恢复的预览位置也是
   if (done && data.state === RootState.READY) {
     if (before?.path !== data.path) { if (model.opened !== null) preview.reload(); } else preview.refresh(); // 换了根目录，opened 已清空：旧预览随即关掉，不再读
   }

@@ -43,7 +43,7 @@ export class Model {
   expanded = new Set(); // 不变量：展开的目录，它的每一级上层也展开
   wanted = new Map(); // 恢复状态时各目录要取够的条数，第一次取用后删掉
   selected = null; // 选中的条目（高亮和键盘移动用，文件夹、不能打开的条目都可以）
-  opened = null; // Mac 侧栏预览中的文件；iPhone 一直是 null
+  opened = null; // 页内预览中的文件（两端一样）；null 是在看目录
   showHidden = false;
   sort = DEFAULT_SORT; // 全局一份，由页面存进 persisted
   view = View.LIST; // 全局一份，由页面存进 persisted
