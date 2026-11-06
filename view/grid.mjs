@@ -94,12 +94,40 @@ export function windowOf(layout, first, last) {
   return { from, to: Math.min(tail.from + tail.count, tail.note ? tail.from + 1 : firstOfRow(layout, last - 1) + layout.cols) };
 }
 
-// handlers: { open(path), enter(path), more(path), retry(path), menu(event, cell), back? }
+// 键盘在图标视图里的一步（纯逻辑）：action 是 up、down、left、right。返回 { select: 序号 } 或 null。
+// 上下走同一列：跳过说明项独占的行，目标行不满、没有这一列时选那一行的最后一个；左右在条目之间走（行尾接下一行的第一个）。
+// 选中的条目不在 cells 里按没有选中算：↓ 选第一个条目，↑ 选最后一个。
+export function stepCells(cells, layout, selected, action) {
+  const at = selected === null ? -1 : cells.findIndex(cell => cell.type === 'entry' && cell.path === selected);
+  const first = cells.findIndex(cell => cell.type === 'entry');
+  if (first < 0) return null;
+  if (at < 0) {
+    if (action === 'down') return { select: first };
+    if (action === 'up') return { select: cells.map(cell => cell.type).lastIndexOf('entry') };
+    return null;
+  }
+  if (action === 'left' || action === 'right') {
+    const next = at + (action === 'right' ? 1 : -1);
+    return cells[next]?.type === 'entry' ? { select: next } : null;
+  }
+  const row = rowOfCell(layout, at), column = at - firstOfRow(layout, row), step = action === 'down' ? 1 : -1;
+  for (let r = row + step; r >= 0 && r < layout.rows; r += step) {
+    const span = spanAt(layout, r);
+    if (span.note) continue;
+    return { select: Math.min(firstOfRow(layout, r) + column, span.from + span.count - 1) };
+  }
+  return null;
+}
+
+// handlers: { open(path), enter(path), more(path), retry(path), menu(event, cell), back?, select?(path | null) }
+// select 是 Mac 单击选中，不给就是 iPhone 的轻点打开。
 // back 给了就在头部最左边放「返回」（Mac，和没有原生返回的环境）；不给就没有头部，iPhone 用原生返回，标题在工具条上。
 // draggable、longPress 同 mountTree。
-export function mountGrid(el, model, handlers, { draggable = true, longPress = false } = {}) {
+// keyboard：滚动容器（.gbody）可以获得焦点，键盘才接得上（Mac）。
+export function mountGrid(el, model, handlers, { draggable = true, longPress = false, keyboard = false } = {}) {
   const head = h('div', { class: 'ghead' }), body = h('div', { class: 'gbody' }), spacer = h('div', { class: 'gspacer' }), win = h('div', { class: 'gwin' });
   head.hidden = true;
+  if (keyboard) body.tabIndex = 0;
   spacer.append(win);
   body.append(spacer);
   el.replaceChildren(head, body);
@@ -175,20 +203,33 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
     paint();
   }
 
-  const gestures = mountGestures(el, {
+  // 点击（iPhone）、双击、⌘↓ 和右键「打开」共用这一份。
+  const activate = cell => {
+    if (cell.type === 'more') return handlers.more(cell.path);
+    if (cell.type === 'status') return cell.retry ? handlers.retry(cell.path) : undefined;
+    if (cell.kind === EntryKind.DIR) handlers.enter(cell.path);
+    else if (cell.kind === EntryKind.FILE) handlers.open(cell.path);
+  };
+  // 事件挂在 body 上：头部的返回键点击不算「点空白」。
+  const gestures = mountGestures(body, {
     hit: event => cells[event.target.closest?.('.gi')?.dataset.i],
     pressable: cell => cell.type === 'entry',
-    activate: cell => {
-      if (cell.type === 'more') return handlers.more(cell.path);
-      if (cell.type === 'status') return cell.retry ? handlers.retry(cell.path) : undefined;
-      if (cell.kind === EntryKind.DIR) handlers.enter(cell.path);
-      else if (cell.kind === EntryKind.FILE) handlers.open(cell.path);
-    },
+    activate,
+    select: handlers.select && (cell => handlers.select(cell ? cell.path : null)),
     menu: (event, cell) => handlers.menu(event, cell),
     dragText: cell => cell.path,
     longPress,
     scroller: body,
   });
+  // 选中变了只在现有节点上切 .sel，不重建：双击的 dblclick 要落在还在容器里的节点上。
+  const mark = () => { for (const node of win.children) node.classList.toggle('sel', cells[node.dataset.i]?.type === 'entry' && cells[node.dataset.i].path === model.selected); };
+  // 滚到这个单元格能看见，只滚最少的距离。
+  const reveal = index => {
+    const top = (spacer.offsetTop || 0) + rowTop(layout, rowOfCell(layout, index), cellH, noteH);
+    if (top < body.scrollTop) body.scrollTop = top;
+    else if (top + cellH > body.scrollTop + body.clientHeight) body.scrollTop = top + cellH - body.clientHeight;
+    paint();
+  };
   body.addEventListener('scroll', paint, { passive: true });
   new ResizeObserver(relayout).observe(body);
 
@@ -206,6 +247,20 @@ export function mountGrid(el, model, handlers, { draggable = true, longPress = f
     scrollTo(top) { body.scrollTop = top; paint(); }, // 浏览器的滚动事件随后还会画一次；这里先画，位置才马上对
     onScroll(fn) { body.addEventListener('scroll', fn, { passive: true }); },
     get layout() { return layout; },
+    select: mark,
+    activate,
+    focus() { body.focus(); },
+    onKey(fn) { body.addEventListener('keydown', fn); },
+    key(action) {
+      const step = stepCells(cells, layout, model.selected, action);
+      if (!step) return;
+      handlers.select(cells[step.select].path);
+      reveal(step.select);
+    },
+    openSelected() {
+      const cell = model.selected === null ? undefined : cells.find(item => item.type === 'entry' && item.path === model.selected);
+      if (cell) activate(cell);
+    },
     // 切会话时调用：长按的等待和吞点击的标记都属于上一个会话。
     reset() { gestures.reset(); },
     dispose() { gestures.dispose(); },

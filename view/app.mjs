@@ -12,13 +12,15 @@ import { showNotice } from './notice.mjs';
 import { mountPreview } from './preview.mjs';
 import { EntryKind, RootState, SortKey, Type } from './protocol.mjs';
 import { createRestore, createTrail } from './restore.mjs';
+import { browseAction, previewAction } from './keys.mjs';
 import { mountTree, rootName } from './tree.mjs';
 
 const coda = window.coda;
 const $ = id => document.getElementById(id);
 const quiet = fn => { try { return fn(); } catch { return undefined; } };
 const hasToolbar = typeof coda.toolbar === 'function' && coda.platform === 'mac';
-// iPhone 上打开文件推入新视图，树页不进预览模式；selected 只用来高亮，从保存的状态恢复出来也一样。
+// iPhone 上打开文件推入新视图，树页不进预览模式；opened 一直是 null，selected 只用来高亮。
+// Mac 照 Finder：单击选中、双击打开，键盘接在目录树和图标视图的滚动容器上。
 const isIOS = coda.platform === 'ios';
 
 let persisted = parseState(quiet(() => coda.getState()));
@@ -42,7 +44,8 @@ const tree = mountTree($('tree'), model, {
   more: path => model.loadMore(path),
   retry: path => model.retry(path),
   menu: (event, row) => pathMenu(event, row),
-}, { draggable: !isIOS, longPress: isIOS });
+  select: isIOS ? null : path => selectEntry(path),
+}, { draggable: !isIOS, longPress: isIOS, keyboard: !isIOS });
 const grid = mountGrid($('grid'), model, {
   open: openFile,
   enter: path => enterDir(path),
@@ -50,13 +53,14 @@ const grid = mountGrid($('grid'), model, {
   retry: path => model.retry(path),
   menu: (event, cell) => pathMenu(event, cell),
   back: nativeBack ? null : () => leaveDir(),
-}, { draggable: !isIOS, longPress: isIOS });
+  select: isIOS ? null : path => selectEntry(path),
+}, { draggable: !isIOS, longPress: isIOS, keyboard: !isIOS });
 const restore = createRestore(model, { tree, grid });
 const trail = createTrail();
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
   actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
-  back: isIOS ? null : () => { backPressed = true; model.select(null); },
+  back: isIOS ? null : closePreview,
   // 选中文字的右键菜单只有 Mac：iPhone 用系统的选区菜单。
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
 });
@@ -93,8 +97,11 @@ function openInView(path) {
 }
 function openFile(path) {
   if (isIOS && opening) return; // 先于 select 和保存：被忽略的点击什么都不改
-  model.select(path);
-  if (!isIOS) return;
+  if (!isIOS) {
+    openPressed = true; // 用户打开的：render 把焦点交给预览面板
+    return model.openFile(path);
+  }
+  selectEntry(path);
   saveNow(); // 视图随即卸载，这一刻的展开状态、条数和滚动位置先存下
   openInView(path);
 }
@@ -108,9 +115,23 @@ function schedule() {
   queueMicrotask(() => { queued = false; render(); });
 }
 
-// 用户点了预览头部的返回：render 据此决定焦点要不要交给目录树，别的模式变化不动焦点。
+// 选中：页面里唯一的入口（单击、取消选中、键盘移动、回上一层）。只改 model.selected 和现有节点上的 .sel，不重画，也不经 onChange；保存自己排。
+function selectEntry(path) {
+  if (!model.select(path)) return;
+  (model.view === View.ICONS ? grid : tree).select();
+  queueSave();
+}
+const browser = () => (model.view === View.ICONS ? grid : tree);
+
+// 预览头部的返回和预览里的 ⌘↑ 是同一个动作：opened 清掉，selected 留着。
+function closePreview() {
+  backPressed = true;
+  model.closeFile();
+}
+// 用户点了预览头部的返回：render 据此决定焦点要不要交给浏览区，别的模式变化不动焦点。
 let backPressed = false;
-const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.selected !== null && !isIOS ? 'preview' : model.view === View.ICONS ? 'grid' : 'tree');
+let openPressed = false; // 用户打开了文件：同返回对称，页面持有焦点时 render 把焦点交给预览面板
+const mode = () => (infoOpen ? 'info' : !model.ready ? 'notice' : model.opened !== null && !isIOS ? 'preview' : model.view === View.ICONS ? 'grid' : 'tree');
 
 // 说明区只在内容变了才重画，免得重试按钮在点击中途被换掉。
 let noticeKey = null;
@@ -124,8 +145,8 @@ function paintNotice() {
 
 function render() {
   const current = mode();
-  const refocus = backPressed && document.hasFocus();
-  backPressed = false;
+  const refocus = backPressed && document.hasFocus(), handoff = openPressed && document.hasFocus();
+  backPressed = openPressed = false;
   for (const id of ['tree', 'grid', 'preview', 'notice', 'info']) {
     $(id).classList.toggle('off', current !== id);
     $(id).inert = current !== id;
@@ -135,13 +156,15 @@ function render() {
   (model.view === View.ICONS ? grid : tree).render(); // 只画正在用的视图，另一个留着它的内容和滚动位置
   landed();
   restore.settle();
-  if (current === 'preview' && preview.path !== model.selected) {
-    preview.open(model.selected, pending.preview);
+  if (current === 'preview' && preview.path !== model.opened) {
+    preview.open(model.opened, pending.preview);
     pending.preview = null;
   } else if ((browsing || current === 'notice') && preview.path !== null) preview.close(); // 属性页和预览一样只切可见性，不动别的面板的内容
   // 返回按钮随预览一起 inert，焦点会掉到页面外：用户刚点了返回、页面又持有焦点时交给目录树或网格。
   // 后台刷新、切会话、root 变化造成的切换不动焦点，免得抢走客户端输入框的焦点。
-  if (refocus && browsing) { $(current).tabIndex = -1; $(current).focus(); }
+  if (refocus && browsing) browser().focus();
+  // 打开时浏览区变 inert，焦点本来就会掉：交给预览面板，⌘↑ 才收得到。
+  if (handoff && current === 'preview') $('preview').focus();
   syncToolbar();
   declareBack();
 }
@@ -273,7 +296,11 @@ preview.onScroll(menu.hide);
 // 不能打开的条目（指向外面或失效的链接、other）没有「添加到聊天」，和不能拖动一致；它们仍有复制路径和属性。
 function pathMenu(event, row) {
   const dead = row.kind === EntryKind.LINK || row.kind === EntryKind.OTHER;
+  // Mac 的第一项和双击是同一个动作（右键不改选中）；文件夹在列表里写展开或收起，别的写打开。iPhone 轻点就是打开，菜单不变。
+  const folder = row.kind === EntryKind.DIR, listed = model.view !== View.ICONS;
+  const open = isIOS || dead ? [] : [{ label: folder && listed ? (row.open ? '收起' : '展开') : '打开', run: () => browser().activate(row) }, { separator: true }];
   menu.open(event, { title: row.path, detail: dead ? undefined : infoText(row) || undefined, items: [
+    ...open,
     ...(dead ? [] : [{ label: '添加到聊天', run: () => chat.add(row.path) }]),
     { label: '复制相对路径', run: () => coda.copy(row.path) },
     { label: '复制绝对路径', run: () => coda.copy(`${model.root.path}/${row.path}`) },
@@ -284,12 +311,35 @@ function pathMenu(event, row) {
 $('tree').addEventListener('scroll', menu.hide, { passive: true });
 grid.onScroll(menu.hide);
 
+// ---- 键盘（Mac）----
+// 两个作用域各管各的，匹配的键同步 preventDefault，不匹配的不拦；菜单开着不处理，两处都不主动抢焦点。
+// 浏览区：按了键就算用户自己动了，作废这个视图还在等的滚动恢复，即使这次不用滚动；⌘↑ 只有图标视图有（回上一层，同头部的返回），根目录什么都不做。
+function browseKey(event) {
+  if (isIOS || !menu.hidden) return;
+  const action = browseAction(event), icons = model.view === View.ICONS;
+  if (!action || (action === 'parent' && !icons)) return;
+  event.preventDefault();
+  restore.drop(icons ? 'grid' : 'tree');
+  if (action === 'open') browser().openSelected();
+  else if (action === 'parent') leaveDir();
+  else browser().key(action);
+}
+tree.onKey(browseKey);
+grid.onKey(browseKey);
+// 侧栏预览：只有 ⌘↑，返回。焦点要在面板里才收得到（点正文、打开时交接）。
+$('preview').addEventListener('keydown', event => {
+  if (isIOS || infoOpen || !menu.hidden || !previewAction(event)) return;
+  event.preventDefault();
+  closePreview();
+});
+
 // ---- 图标视图的进入和返回 ----
 // 进入子目录滚到顶部，先记下上层的位置；回上一层恢复进去之前的位置（记录在内存里，页面卸载后没有，回到顶部）。
 // shownCwd：页面已经处理过的 cwd；它被模型自己换掉（目录没了退到上一层、根目录变了回到根目录）时，在 landed 里补上滚动。
 let shownCwd = '';
 function enterDir(path) {
   trail.remember(model.cwd, grid.scroll());
+  selectEntry(null); // 进入新的一层：选中清空
   model.enter(path);
   shownCwd = model.cwd;
   restore.drop('grid');
@@ -299,8 +349,11 @@ function enterDir(path) {
 // 退 levels 层（到根为止）；已经在根目录返回 false。
 function leaveDir(levels = 1) {
   if (model.cwd === '') return false;
+  const from = model.cwd.split('/');
   model.leave(levels);
   land(trail.take(model.cwd) ?? 0);
+  // 选中来时经过的那个文件夹（退到的那一层的直接子项）。目录被删、模型自己退回上层走 landed，不改选中。
+  selectEntry(from.slice(0, model.cwd === '' ? 1 : model.cwd.split('/').length + 1).join('/'));
   declareBack();
   return true;
 }
@@ -372,7 +425,7 @@ function onSession(data) {
   clearTimeout(unlockTimer);
   hint.hide();
   const saved = persisted.sessions[data.session] ?? null;
-  pending = { preview: saved ? { top: saved.scroll.top, left: saved.scroll.left } : null };
+  pending = { preview: saved?.opened ? { top: saved.scroll.top, left: saved.scroll.left } : null };
   model.receive(data, saved);
   trail.clear();
   restore.clear();
@@ -391,7 +444,7 @@ function onRoot(data) {
   const done = model.receive(data);
   if (model.scope !== scope) invalidateScroll(); // 换了根目录（同根重建不算）：旧根目录的位置和记录不能给新的用
   if (done && data.state === RootState.READY) {
-    if (before?.path !== data.path) preview.reload(); else preview.refresh();
+    if (before?.path !== data.path) { if (model.opened !== null) preview.reload(); } else preview.refresh(); // 换了根目录，opened 已清空：旧预览随即关掉，不再读
   }
 }
 

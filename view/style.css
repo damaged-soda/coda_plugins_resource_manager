@@ -134,7 +134,10 @@ button.icon svg { display: block; }
 .image { display: grid; place-items: start center; padding: 12px; }
 .image img { max-width: 100%; height: auto; border-radius: var(--coda-radius, 6px); background: var(--coda-secondary-background, transparent); }
 
-#notice:focus { outline: none; }
+#notice:focus, #preview:focus { outline: none; }
+/* 键盘焦点：选中的高亮已经表示位置，点击时不画外框；只在键盘操作（:focus-visible）时给容器内边一圈细线。 */
+#tree:focus, .gbody:focus { outline: none; }
+#tree:focus-visible, .gbody:focus-visible { outline: 1px solid var(--coda-accent, #0a84ff); outline-offset: -2px; }
 .menu { position: fixed; z-index: 10; width: max-content; max-width: min(280px, calc(100vw - var(--safe-left) - var(--safe-right) - 8px)); padding: 4px; border: 1px solid var(--coda-outline, var(--line)); border-radius: var(--coda-radius-card, 10px);
   background: var(--coda-card, var(--coda-background, #fff));
   /* 高度有上限：内容多（长路径加五项）时在菜单里滚动，不超出安全区；位置由 menu.mjs 夹在安全区内。 */

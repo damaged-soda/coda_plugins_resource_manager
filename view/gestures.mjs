@@ -5,10 +5,12 @@ export const HOLD_SLOP = 10;
 
 // el：接事件的元素；scroller：滚动的元素（滚动事件不冒泡），缺省同 el。选项：
 // hit(event) → 点到的那一项或 undefined；pressable(item)：能不能弹菜单、拖动、长按（目录树的说明行、「再显示」不能）；
-// activate(item)：点击；menu(event, item)：右键，长按到点时收到 { clientX, clientY }；dragText(item)：拖动时带的文字（元素是否可拖由调用方设 draggable）；
+// activate(item)：点击（iPhone）；Mac 给了 select 就按 Finder 的规则：单击条目只 select(item)，单击空白 select(null)，双击条目才 activate(item)；
+// 说明行、「再显示」这类不能选的项单击就 activate，direct(event, item) 为真的点击（展开箭头）也直接 activate、不选中，双击它不再重复激活。
+// 双击靠浏览器的 dblclick，要求派发时目标节点还在容器里，所以 select 不能重画。menu(event, item)：右键，长按到点时收到 { clientX, clientY }；dragText(item)：拖动时带的文字（元素是否可拖由调用方设 draggable）；
 // longPress：触屏上按住一项打开 menu，不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
 // 返回 { reset, dispose }：reset 在切会话时调用，长按的等待和吞点击的标记都属于上一个会话；dispose 摘掉全部监听。
-export function mountGestures(el, { hit, pressable, activate, menu, dragText, longPress = false, scroller = el }) {
+export function mountGestures(el, { hit, pressable, activate, select, direct = () => false, menu, dragText, longPress = false, scroller = el }) {
   const listeners = [];
   const on = (target, type, fn, options) => { target.addEventListener(type, fn, options); listeners.push([target, type, fn]); };
 
@@ -39,7 +41,14 @@ export function mountGestures(el, { hit, pressable, activate, menu, dragText, lo
   on(el, 'click', event => {
     if (swallow) { swallow = false; return; }
     const item = hit(event);
-    if (item) activate(item);
+    if (!select) { if (item) activate(item); return; }
+    if (!item) select(null);
+    else if (!pressable(item) || direct(event, item)) activate(item);
+    else select(item);
+  });
+  if (select) on(el, 'dblclick', event => {
+    const item = hit(event);
+    if (item && pressable(item) && !direct(event, item)) activate(item);
   });
   on(el, 'contextmenu', event => {
     const item = hit(event);

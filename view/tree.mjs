@@ -3,7 +3,7 @@ import { EntryKind, SortKey } from './protocol.mjs';
 import { dateText, infoText, sizeText, subText } from './format.mjs';
 import { mountGestures } from './gestures.mjs';
 import { icon, iconFor } from './icons.mjs';
-import { isHidden, joinPath } from './model.mjs';
+import { isHidden, joinPath, parentOf } from './model.mjs';
 
 const OVERSCAN = 8;
 
@@ -35,21 +35,44 @@ export function visibleRows(model) {
   return rows;
 }
 
+// 键盘在列表里的一步（纯逻辑）：action 是 up、down、left、right。返回 { select: 序号 }（选中那一行）、{ toggle: 序号 }（展开或收起那一行）或 null。
+// 选中的条目不在 rows 里（被删、被藏）按没有选中算：↓ 选第一个条目，↑ 选最后一个；说明行和「再显示」跳过。
+export function stepRows(rows, selected, action) {
+  const entries = [];
+  rows.forEach((row, i) => { if (row.type === 'entry') entries.push(i); });
+  if (entries.length === 0) return null;
+  const at = selected === null ? -1 : rows.findIndex(row => row.type === 'entry' && row.path === selected);
+  if (action === 'up' || action === 'down') {
+    if (at < 0) return { select: action === 'down' ? entries[0] : entries[entries.length - 1] };
+    const next = entries[entries.indexOf(at) + (action === 'down' ? 1 : -1)];
+    return next === undefined ? null : { select: next };
+  }
+  if (at < 0) return null;
+  const row = rows[at], folder = row.kind === EntryKind.DIR;
+  if (action === 'right') return folder && !row.open ? { toggle: at } : null;
+  if (folder && row.open) return { toggle: at }; // ←：展开的文件夹先收起
+  const parent = parentOf(row.path); // 已收起或是文件：选中它所在的文件夹（它一定在 rows 里，不管有没有画出来）
+  const up = parent === '' ? -1 : rows.findIndex(item => item.type === 'entry' && item.path === parent);
+  return up < 0 ? null : { select: up };
+}
+
 // 根目录的名字：路径的最后一段，分区标题和 iPhone 的页内工具条共用。
 export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
 
 export const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
-// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row) }
+// handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row), select(path | null) }；select 是 Mac 单击选中，不给就是 iPhone 的轻点打开
 // menu 收到整行（路径、种类、大小、修改时间）。
 // draggable：触屏上拖行没有用处，还会抢滚动，关掉。now：当前时间，日期的相对格式用，测试可注入。
 // longPress：触屏上按住一行打开 handlers.menu（Mac 用右键）。不设 touch-action，滚动照旧，滚动接管时收到 pointercancel 作废。
-export function mountTree(el, model, handlers, { draggable = true, longPress = false, now = Date.now } = {}) {
+// keyboard：滚动容器可以获得焦点，键盘才接得上（Mac）。
+export function mountTree(el, model, handlers, { draggable = true, longPress = false, keyboard = false, now = Date.now } = {}) {
   const title = document.createElement('div'), spacer = document.createElement('div'), win = document.createElement('div');
   title.className = 'section truncate'; spacer.className = 'spacer'; win.className = 'win';
   title.hidden = true;
   spacer.append(win);
   el.replaceChildren(title, spacer);
+  if (keyboard) el.tabIndex = 0;
   let rows = [], rowH = 24;
 
   // 探针放在 spacer 里：量到的是行在真实结构里的高度。
@@ -133,19 +156,32 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     return node;
   }
 
+  // 点击（iPhone）、双击、⌘↓ 和右键「打开」共用这一份：文件夹展开或收起，文件打开，说明行执行它的动作。
+  const activate = row => {
+    if (row.type === 'more') return handlers.more(row.path);
+    if (row.type === 'status') return row.retry ? handlers.retry(row.path) : undefined;
+    if (row.kind === EntryKind.DIR) handlers.toggle(row.path);
+    else if (row.kind === EntryKind.FILE) handlers.open(row.path);
+  };
   const gestures = mountGestures(el, {
     hit: event => rows[event.target.closest?.('.row')?.dataset.i],
     pressable: row => row.type === 'entry',
-    activate: row => {
-      if (row.type === 'more') return handlers.more(row.path);
-      if (row.type === 'status') return row.retry ? handlers.retry(row.path) : undefined;
-      if (row.kind === EntryKind.DIR) handlers.toggle(row.path);
-      else if (row.kind === EntryKind.FILE) handlers.open(row.path);
-    },
+    activate,
+    select: handlers.select && (row => handlers.select(row ? row.path : null)),
+    direct: (event, row) => row.kind === EntryKind.DIR && !!event.target.closest?.('.chev'), // 展开箭头：展开或收起，选中不变
     menu: (event, row) => handlers.menu(event, row),
     dragText: row => row.path,
     longPress,
   });
+  // 选中变了只在现有节点上切 .sel，不重建：双击的 dblclick 要落在还在容器里的节点上。
+  const mark = () => { for (const node of win.children) node.classList.toggle('sel', rows[node.dataset.i]?.path === model.selected && rows[node.dataset.i]?.type === 'entry'); };
+  // 滚到这一行能看见，只滚最少的距离；按行号算位置，不找节点（没画出来的行也行）。
+  const reveal = index => {
+    const top = (spacer.offsetTop || 0) + index * rowH;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + rowH - el.clientHeight;
+    paint();
+  };
   el.addEventListener('scroll', paint, { passive: true });
   new ResizeObserver(paint).observe(el);
 
@@ -154,6 +190,23 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     remeasure() { measure(); this.render(); },
     scroll: () => el.scrollTop,
     scrollTo(top) { el.scrollTop = top; },
+    select: mark,
+    activate,
+    focus() { el.focus(); },
+    onKey(fn) { el.addEventListener('keydown', fn); },
+    // 键盘一步：选中移动并滚到能看见，→ ← 展开收起。
+    key(action) {
+      const step = stepRows(rows, model.selected, action);
+      if (!step) return;
+      if (step.toggle !== undefined) return handlers.toggle(rows[step.toggle].path);
+      handlers.select(rows[step.select].path);
+      reveal(step.select);
+    },
+    // ⌘↓：和双击同一个动作；没有选中或选中的不在了什么都不做。
+    openSelected() {
+      const row = model.selected === null ? undefined : rows.find(item => item.type === 'entry' && item.path === model.selected);
+      if (row) activate(row);
+    },
     // 切会话时调用：长按的等待和吞点击的标记都属于上一个会话。
     reset() { gestures.reset(); },
   };

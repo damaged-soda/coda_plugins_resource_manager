@@ -21,6 +21,7 @@ const state = (view, sessions = {}) => ({ v: 1, seq: 1, hidden: false, view, ses
 
 // 起一个会话；icons 为 true 时从图标视图开始（保存的状态里 view 是 icons）。
 async function start(t, { platform = 'mac', icons = true, saved, settle = true, ...options } = {}) {
+  platformNow = platform;
   const sessions = saved ? { s1: { at: 1, expanded: [], selected: null, scroll: { tree: 0, top: 0, left: 0 }, ...saved } } : {};
   const ctx = await openTree(t, { platform, listing: makeListing(), state: state(icons ? 'icons' : 'list', sessions), ...options });
   Object.assign(body(ctx.page), { clientWidth: 300, clientHeight: ROW * 5 });
@@ -28,7 +29,15 @@ async function start(t, { platform = 'mac', icons = true, saved, settle = true, 
   if (settle) await flush();
   return ctx;
 }
-const click = async (page, name) => { cellNamed(page, name).dispatch('click'); await flush(); };
+// 打开一项：Mac 是一次完整的双击（两次 click 加 dblclick，浏览器的顺序），iPhone 是轻点（不监听 dblclick）。
+let platformNow = 'mac';
+const click = async (page, name) => {
+  const node = cellNamed(page, name);
+  node.dispatch('click');
+  if (platformNow === 'mac') { node.dispatch('click'); node.dispatch('dblclick'); }
+  await flush();
+};
+const tap = async (page, name) => { cellNamed(page, name).dispatch('click'); await flush(); };
 // 经「显示」菜单换视图：起的时候要带 coda.toolbar（Mac 的原生「更多」按钮）。
 const showAs = async ({ page, host }, view) => { host.events.toolbar({ id: 'more' }); pick(page, view === 'icons' ? '图标' : '列表'); await flush(); };
 const TOOLBAR = { toolbar: () => {} };
@@ -79,7 +88,7 @@ test('Mac 右键弹行菜单（和列表一样的项：复制路径、属性）�
   cellNamed(page, 'x.txt').dispatch('contextmenu', { clientX: 10, clientY: 10 });
   assert.equal(visible(page.menu), true);
   const items = page.menu.find(node => node.tagName === 'BUTTON').map(node => node.textContent);
-  assert.deepEqual(items, ['添加到聊天', '复制相对路径', '复制绝对路径', '属性']);
+  assert.deepEqual(items, ['打开', '添加到聊天', '复制相对路径', '复制绝对路径', '属性']);
   page.menu.find(node => node.tagName === 'BUTTON').at(-1).dispatch('click');
   await flush();
   assert.equal(visible(page.info), true, '属性页叠在图标视图上');
@@ -452,7 +461,7 @@ test('切换视图：列表的展开状态在图标里不丢，换回去目录�
   const ctx = await start(t, { icons: false, coda: TOOLBAR });
   const { page } = ctx;
   const dirRow = () => page.tree.find(node => node.classList.contains('row') && node.textContent.includes('dir'))[0];
-  dirRow().dispatch('click');
+  dirRow().dispatch('dblclick');
   await flush();
   assert.equal(dirRow().getAttribute('aria-expanded'), 'true');
   await showAs(ctx, 'icons');
