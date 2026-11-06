@@ -1,7 +1,9 @@
 // 文件预览：只接收路径和读块的能力，不依赖树的状态。readFile 是纯逻辑；mountPreview 才碰 DOM。
 import { h } from './dom.mjs';
 import { formatSize } from './format.mjs';
+import { HIGHLIGHT_LIMIT, appendAll, highlight } from './highlight.mjs';
 import { icon, iconFor } from './icons.mjs';
+import { languageOf } from './languages.mjs';
 import { ContentKind, EntryKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
 import { clippedSelection, linesOf } from './selection.mjs';
 
@@ -88,13 +90,18 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
     revoke();
     shown = { size: result.size, mtimeMs: result.mtimeMs };
     // 元信息：目录 · 行数 · 大小；根目录下的文件没有目录，非文本没有行数。修改时间放进 title。
+    // 高亮：认得出语言才试；超过上限不试，库或解析出错就退回纯文本，都在元信息里注明。认不出语言的不加说明。
     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
     const lines = result.kind === ContentKind.TEXT ? `${lineCount(result.text)} 行` : '';
-    const note = result.truncated ? `只显示前 ${formatSize(TEXT_LIMIT)}` : '';
+    const language = result.kind === ContentKind.TEXT ? languageOf(path.split('/').pop()) : null;
+    const colored = language && result.bytes.length <= HIGHLIGHT_LIMIT ? highlight(result.text, language) : null;
+    const plain = !language ? '' : result.bytes.length > HIGHLIGHT_LIMIT ? '不高亮' : colored ? '' : '没能高亮';
+    const note = [result.truncated ? `只显示前 ${formatSize(TEXT_LIMIT)}` : '', plain].filter(Boolean).join('，');
     setMeta([dir, lines, formatSize(result.size), note].filter(Boolean).join(' · '), `修改于 ${formatTime(result.mtimeMs)}`);
     if (result.kind === ContentKind.TEXT) {
       const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' }, Array.from({ length: lineCount(result.text) }, (_, i) => i + 1).join('\n'));
-      const text = h('pre', { class: 'text selectable' }, result.text);
+      const text = h('pre', { class: 'text selectable' }, ...(colored ? [] : [result.text]));
+      if (colored) appendAll(text, colored);
       if (selectionMenu) text.addEventListener('contextmenu', event => onSelect(event, text));
       body.replaceChildren(h('div', { class: 'code' }, gutter, text));
     } else if (result.kind === ContentKind.IMAGE && result.bytes.length > 0) {

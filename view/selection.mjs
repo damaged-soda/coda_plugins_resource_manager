@@ -1,7 +1,7 @@
 // 预览里选中的文字：裁到正文元素里面，算出覆盖的行。DOM 的部分只用 Range 的标准方法，行号是纯函数。
 const START_TO_START = 0, END_TO_END = 2; // Range.START_TO_START、Range.END_TO_END
 
-// el 是正文（一个 pre 加一个文本节点）。选区为空或和 el 不相交返回 null；
+// el 是正文（一个 pre，里面是文本节点，上色后还有嵌套的 span）。选区为空或和 el 不相交返回 null；
 // 否则把选区裁到 el 里，返回 { text, start }：裁剪后的文字和它在 el 文字里的起点（UTF-16 偏移）。裁剪后为空也返回 null。
 // 选区的起点或终点落在 el 外面（跨出正文、从行号列开始拖）时，裁掉外面的部分。
 export function clippedSelection(el, selection = globalThis.getSelection?.()) {
