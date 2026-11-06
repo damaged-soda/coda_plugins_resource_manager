@@ -57,7 +57,8 @@ test('iPhone：点文件在页内切到预览，只读一次、不调 coda.open�
   assert.equal(visible(page.tree), false);
   assert.equal(host.sent.filter(m => m.type === 'read').length, 1, '读一次');
   assert.deepEqual(host.calls.back.at(-1), ['资源管理器'], '预览比目录多一级：回到「资源管理器」');
-  assert.equal(host.saved.at(-1)?.sessions.s1?.opened ?? 'f1.txt', 'f1.txt');
+  host.events.visibility(false);
+  assert.equal(host.saved.at(-1).sessions.s1.opened, 'f1.txt', '长按返回退出整层时保存的 opened');
   host.events.back({ steps: 1 });
   await flush();
   assert.ok(visible(page.tree));
