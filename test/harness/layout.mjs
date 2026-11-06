@@ -326,6 +326,8 @@ try {
   await rowCheck('Mac 换深色并改字号后');
   await open('portrait', 'ios', 'light');
   await rowCheck('iPhone 竖屏');
+  const adjust = `(() => { const c = getComputedStyle(document.documentElement); return (c.getPropertyValue('text-size-adjust') || c.getPropertyValue('-webkit-text-size-adjust')) })()`;
+  check('index.html：关掉了文字自动放大', (await evaluate(adjust)) === '100%');
   check('iPhone：行高 58', (await evaluate(`document.querySelector('.row.entry').getBoundingClientRect().height`)) === 58);
   check('iPhone：不显示分区标题', await evaluate(`getComputedStyle(document.querySelector('.section')).display === 'none'`));
   await evaluate(`postMessage({ harness: 'theme', kind: 'dark' }, '*')`);
@@ -367,6 +369,7 @@ try {
   const SAFE_BOTTOM = { portrait: 34, landscape: 21 };
   for (const size of ['portrait', 'landscape']) {
     await openFile(size, 'light');
+    check('file.html：关掉了文字自动放大', (await evaluate(adjust)) === '100%');
     const land = size === 'landscape';
     const bar = await evaluate(`(() => { const b = document.getElementById('bar'), r = b.getBoundingClientRect();
       const buttons = [...b.querySelectorAll('button')].filter(x => x.getClientRects().length > 0);

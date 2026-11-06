@@ -10,6 +10,8 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
   font: var(--coda-font-size, 13px)/1.45 var(--coda-font, -apple-system, system-ui, sans-serif);
   color: var(--coda-foreground, #1d1d1f); background: transparent;
+  /* iOS WebKit 会自动放大文字，上色后正文是许多 span，被放大而行号列不放大，两列对不齐；整页关掉，字号只按 --coda-font-size。 */
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 /* 种类图标的色调。图标是 currentColor，.tone-* 把颜色给到 svg 上；文件夹用强调色，链接和特殊文件没有色调，跟随三级文字色。
    两种外观下，在 --coda-background 和 --coda-card 上的对比度都不低于 3:1（harness 读真实计算值检查）；改色值要重新跑。 */
