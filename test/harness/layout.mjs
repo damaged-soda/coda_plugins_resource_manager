@@ -357,7 +357,10 @@ try {
       && JSON.stringify(items.map(x => x.mark)) === JSON.stringify(LAYER_NAMES.map(x => x === (view === 'icons' ? '图标' : '列表') || x === sort)) && aligned(p) && inSafe(p, safe);
   };
   const press = key => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)} }))`);
-  const hover = label => evaluate(`(() => { const b = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); b.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' })); return b.getAttribute('aria-expanded'); })()`);
+  // 悬停：返回这一项的 aria-expanded。给了 probe 表达式就在同一次调用里、派发之后立刻求值，返回 { expanded, probe }：
+  // 悬停会启动 150 毫秒的收起计时器，要读「立刻还在」就不能跨 CDP 调用，机器忙时两次调用之间可能已经过了 150 毫秒。
+  const hover = (label, probe) => evaluate(`(() => { const b = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); b.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
+    ${probe === undefined ? `return b.getAttribute('aria-expanded');` : `return { expanded: b.getAttribute('aria-expanded'), probe: ${probe} };`} })()`);
   const viewport = setViewport;
   const gridShown = `getComputedStyle(document.getElementById('grid')).visibility === 'visible' && document.querySelector('#grid .gi') !== null`;
   const treeShown = `getComputedStyle(document.getElementById('tree')).visibility === 'visible' && document.querySelector('.row.entry') !== null`;
@@ -435,8 +438,7 @@ try {
       before && layerOk(side) && side.right <= rootBox.left && side.left >= 0 && side.width < OLD_WIDTH.mac && Math.abs(side.top + 5 - shownTop) <= 2 && expandedAfterHover === 'true' && rootOk(rootBox, { hidden: true }), JSON.stringify({ side, rootBox, shownTop }));
     await shoot(`mac-sidebar-${theme}-menu-flyout`);
     // 鼠标移到别的项：之后约 150 毫秒才收起（立刻还在），斜着移过去不误关。
-    await hover('刷新');
-    const kept = await evaluate(`!document.getElementById('submenu').hidden`);
+    const { probe: kept } = await hover('刷新', `!document.getElementById('submenu').hidden`); // 派发和读取在同一次调用里，不和 150 毫秒计时器赛跑
     await until(`document.getElementById('submenu').hidden`, '移到别的项后侧面板收起');
     check(`Mac ${theme}：鼠标移到别的项，侧面板不是立刻收起，之后收起，「显示」复位`, kept && (await evaluate(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === '显示').getAttribute('aria-expanded')`)) === 'false');
     // 点击「显示」同样弹出；点里面不算点外面。
