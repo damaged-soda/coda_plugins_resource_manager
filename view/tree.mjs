@@ -1,13 +1,11 @@
 // 目录树：visibleRows 把模型压成扁平行（纯逻辑）；mountTree 只画可见的那一段，上万条也不卡。
 import { EntryKind, SortKey } from './protocol.mjs';
 import { dateText, infoText, sizeText, subText } from './format.mjs';
+import { mountGestures } from './gestures.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { isHidden, joinPath } from './model.mjs';
 
 const OVERSCAN = 8;
-// 长按：按住这么久、移动不超过这个距离才算。
-export const HOLD_MS = 500;
-export const HOLD_SLOP = 10;
 
 // 行：{ type: 'entry' | 'status' | 'more', path, name, depth, kind, link, size, mtimeMs, open, busy, failed, text }；size、mtimeMs 读不到时没有
 export function visibleRows(model) {
@@ -40,7 +38,7 @@ export function visibleRows(model) {
 // 根目录的名字：路径的最后一段，分区标题和 iPhone 的页内工具条共用。
 export const rootName = path => path.split('/').filter(Boolean).pop() ?? path;
 
-const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
+export const TITLES = { [EntryKind.LINK]: '指向工作目录外的链接，不能打开', [EntryKind.OTHER]: '不能打开的文件' };
 
 // handlers: { open(path), toggle(path), more(path), retry(path), menu(event, row) }
 // menu 收到整行（路径、种类、大小、修改时间）。
@@ -135,50 +133,18 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     return node;
   }
 
-  const rowOf = event => rows[event.target.closest?.('.row')?.dataset.i];
-
-  // 长按：按下只记一个等待；移动超限、抬起、取消、滚动、第二根手指都作废。
-  // 触发后吞掉紧接着的那次点击；没有点击跟来时，下一次按下清掉，不会误吞后面真正的点击。
-  let hold = null, swallow = false;
-  const cancelHold = () => { if (hold) { clearTimeout(hold.timer); hold = null; } };
-  if (longPress) {
-    el.addEventListener('pointerdown', event => {
-      cancelHold();
-      swallow = false;
-      const row = rowOf(event);
-      if (event.isPrimary === false || row?.type !== 'entry') return;
-      const { clientX: x, clientY: y, pointerId: id } = event;
-      hold = { id, x, y, timer: setTimeout(() => {
-        hold = null;
-        swallow = true;
-        handlers.menu({ clientX: x, clientY: y }, row);
-      }, HOLD_MS) };
-    });
-    el.addEventListener('pointermove', event => {
-      if (hold && event.pointerId === hold.id && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > HOLD_SLOP) cancelHold();
-    });
-    for (const type of ['pointerup', 'pointercancel']) el.addEventListener(type, cancelHold);
-    el.addEventListener('scroll', cancelHold, { passive: true });
-  }
-
-  el.addEventListener('click', event => {
-    if (swallow) { swallow = false; return; }
-    const row = rowOf(event);
-    if (!row) return;
-    if (row.type === 'more') return handlers.more(row.path);
-    if (row.type === 'status') return row.retry ? handlers.retry(row.path) : undefined;
-    if (row.kind === EntryKind.DIR) handlers.toggle(row.path);
-    else if (row.kind === EntryKind.FILE) handlers.open(row.path);
-  });
-  el.addEventListener('contextmenu', event => {
-    const row = rowOf(event);
-    if (row?.type === 'entry') { event.preventDefault(); handlers.menu(event, row); }
-  });
-  el.addEventListener('dragstart', event => {
-    const row = rowOf(event);
-    if (row?.type !== 'entry') return event.preventDefault();
-    event.dataTransfer.setData('text/plain', row.path); // 相对路径
-    event.dataTransfer.effectAllowed = 'copy';
+  const gestures = mountGestures(el, {
+    hit: event => rows[event.target.closest?.('.row')?.dataset.i],
+    pressable: row => row.type === 'entry',
+    activate: row => {
+      if (row.type === 'more') return handlers.more(row.path);
+      if (row.type === 'status') return row.retry ? handlers.retry(row.path) : undefined;
+      if (row.kind === EntryKind.DIR) handlers.toggle(row.path);
+      else if (row.kind === EntryKind.FILE) handlers.open(row.path);
+    },
+    menu: (event, row) => handlers.menu(event, row),
+    dragText: row => row.path,
+    longPress,
   });
   el.addEventListener('scroll', paint, { passive: true });
   new ResizeObserver(paint).observe(el);
@@ -189,6 +155,6 @@ export function mountTree(el, model, handlers, { draggable = true, longPress = f
     scroll: () => el.scrollTop,
     scrollTo(top) { el.scrollTop = top; },
     // 切会话时调用：长按的等待和吞点击的标记都属于上一个会话。
-    reset() { cancelHold(); swallow = false; },
+    reset() { gestures.reset(); },
   };
 }

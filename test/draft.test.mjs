@@ -1,7 +1,8 @@
 // add_text：lib/draft.mjs 直接测，加从 activate 入口走到（假的）coda.api 的整条链路。全部用假接口，不碰真实会话。
 // 草稿接口的路径只在 lib/draft.mjs 里写，测试和 harness 从那里取。
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
@@ -298,18 +299,44 @@ test('经 activate：旧代次的 add_text 不处理', async t => {
 
 // ---- 公开边界 ----
 
-test('草稿接口的路径只出现在 lib/draft.mjs，公开文件（含 test/）里都没有', async () => {
-  const root = new URL('..', import.meta.url).pathname;
+// 扫 git 跟踪的文件，返回里面出现草稿接口路径的文件。只扫跟踪的：本地没提交的东西（.claude 之类）不是公开内容，不该让测试误报。
+async function endpointHits(root) {
   const hits = [];
   const endpoint = /threads\/[^`'"\s]*\/draft/; // 比对前去掉反斜杠：转义写法的正则字面量也算
-  const scan = async dir => {
-    for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
-      const rel = dir === '' ? entry.name : `${dir}/${entry.name}`;
-      if (entry.isDirectory()) { if (!['.git', 'node_modules'].includes(entry.name)) await scan(rel); continue; }
-      if (!entry.isFile() || !/\.(mjs|js|html|css|md|json)$/.test(entry.name)) continue;
-      if (endpoint.test((await readFile(join(root, rel), 'utf8')).replaceAll('\\', ''))) hits.push(rel);
+  // -z：名字里有空格、中文也不转义。
+  const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean);
+  assert.ok(tracked.length > 0, 'git ls-files 没有列出文件：不在仓库里，边界没有检查');
+  for (const rel of tracked) {
+    if (!/\.(mjs|js|html|css|md|json)$/.test(rel)) continue;
+    let text;
+    try { text = await readFile(join(root, rel), 'utf8'); } catch (error) {
+      if (error.code === 'ENOENT') continue; // 已跟踪但工作区里删了、还没提交：不在了就没有可检查的
+      throw error;
     }
-  };
-  await scan('');
-  assert.deepEqual(hits, ['lib/draft.mjs']);
+    if (endpoint.test(text.replaceAll('\\', ''))) hits.push(rel);
+  }
+  return hits;
+}
+
+test('草稿接口的路径只出现在 lib/draft.mjs，公开文件（含 test/）里都没有', async () => {
+  assert.deepEqual(await endpointHits(new URL('..', import.meta.url).pathname), ['lib/draft.mjs']);
+});
+
+test('边界测试只看 git 跟踪的文件：没跟踪的不扫，跟踪后删掉的跳过，后缀过滤保留，名字里有空格和中文也行', async t => {
+  const root = await tempDir(t);
+  const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  git('init', '-q');
+  const leaky = `const path = '${['threads', 'x', 'draft'].join('/')}';\n`; // 拼出来：这个测试文件自己不能含接口路径
+  await mkdir(join(root, '.claude'));
+  await mkdir(join(root, '文档 目录'));
+  await writeFile(join(root, 'clean.mjs'), 'export const a = 1;\n');
+  await writeFile(join(root, 'gone.md'), leaky); // 跟踪了，下面从工作区删掉
+  await writeFile(join(root, 'leak.mjs'), leaky);
+  await writeFile(join(root, '文档 目录', '泄露.md'), leaky);
+  await writeFile(join(root, 'data.bin'), leaky); // 后缀不在名单里
+  git('add', '-A');
+  await rm(join(root, 'gone.md'));
+  await writeFile(join(root, '.claude', 'local.md'), leaky); // 没跟踪：不扫
+  await writeFile(join(root, 'untracked.mjs'), leaky);
+  assert.deepEqual((await endpointHits(root)).sort(), ['leak.mjs', '文档 目录/泄露.md']);
 });

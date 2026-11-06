@@ -23,7 +23,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // 先建临时目录，之后所有资源都在 try/finally 里创建，失败时一并清理。
 const base = await mkdtemp(join(tmpdir(), 'rm-ui-'));
-const fixture = join(base, 'demo-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
+const fixture = join(base, 'demo-project'), bulkRoot = join(base, 'bulk-project'), profile = join(base, 'profile'), shots = join(base, 'shots');
+const BULK = 20000; // 图标视图的量：一个目录里这么多文件，在会话 B 里（根目录是 bulk-project）
 const children = [];
 let serverUrl, ws, keepShots = false;
 
@@ -53,7 +54,7 @@ const cleanup = async () => {
   await Promise.all(children.map(stop));
   await chmod(join(fixture, 'locked'), 0o755).catch(() => {});
   // 跑完了截图才留下，中途失败时整个临时目录都删掉。
-  for (const dir of keepShots ? [fixture, profile] : [base]) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const dir of keepShots ? [fixture, bulkRoot, profile] : [base]) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 };
 
 let id = 0; const waiting = new Map();
@@ -65,12 +66,20 @@ const until = async (expr, what) => {
   const deadline = Date.now() + UNTIL_MS;
   for (;;) {
     if (await evaluate(expr)) return;
-    if (Date.now() >= deadline) throw new Error(`等不到：${what}（等了 ${UNTIL_MS / 1000} 秒）`);
+    if (Date.now() >= deadline) throw new Error(`等不到：${what}（等了 ${UNTIL_MS / 1000} 秒）；页面现在：${JSON.stringify(await evaluate(`document.body.innerText.slice(0, 200)`).catch(() => null))}`);
     await wait(50);
   }
 };
 // 页面画完两帧：滚动事件在帧的开头派发、先于 requestAnimationFrame 的回调，所以滚动之后画两帧，滚动引起的重画和关菜单都已经发生。
 const frames = () => within(evaluate(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`), 10000, '等页面画两帧');
+
+// 改视口：等页面量到新尺寸并画完两帧。窗口的 resize 事件在帧的开头派发：不等的话它会迟到，把之后才打开的菜单关掉。所有改视口的地方都走这里。
+async function setViewport(size, platform) {
+  const [w, h] = SIZES[size];
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
+  await until(`innerWidth === ${w} && innerHeight === ${h}`, `视口变成 ${size}`);
+  await frames();
+}
 
 async function start() {
   // ---- 假工作目录 ----
@@ -90,7 +99,7 @@ async function start() {
   await symlink('/nonexistent-target', join(fixture, 'dangling'));
   await chmod(join(fixture, 'locked'), 0);
 
-  const server = launch('harness 服务', process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, fixture, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const server = launch('harness 服务', process.execPath, [fileURLToPath(new URL('./server.mjs', import.meta.url)), fixture, bulkRoot, '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
   serverUrl = await within(Promise.race([server.early, new Promise(resolve => server.stdout.on('data', data => { const m = /http:\/\/\S+/.exec(String(data)); if (m) resolve(m[0]); }))]), STARTUP_MS, 'harness 服务启动');
 
   // 端口上已经有调试服务时，连上的会是别人的 Chrome，不是我们起的这个。
@@ -115,12 +124,13 @@ const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__r
   coda.postMessage = message => { if (message?.requestId) { rpc.sent++; rpc.open.add(message.requestId); } if (message?.type === 'add_text') rpc.adds.push({ text: message.text, block: message.block }); return post(message); };
   coda.copy = text => { rpc.copies.push(text); };
   addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); if (event.data?.harness === 'toolbar' && event.data.items) rpc.toolbars.push(event.data.items); }, true); })()`;
-const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
+const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], tiny: [150, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
-async function open(size, platform, theme, { keep = false, state = null, extra = '' } = {}) {
-  const [w, h, safe] = SIZES[size];
-  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: platform === 'ios' });
+// ready：载入后要等到出现的元素，列表是 .row.entry，图标视图是 .gi。
+async function open(size, platform, theme, { keep = false, state = null, extra = '', ready = '.row.entry' } = {}) {
+  const safe = SIZES[size][2];
+  await setViewport(size, platform);
   const stamp = Date.now(), url = `${serverUrl}view/index.html?platform=${platform}&theme=${theme}&safe=${safe}&t=${stamp}${extra}`;
   if (!keep) {
     await send('Page.navigate', { url: `${serverUrl}view/index.html` });
@@ -132,13 +142,13 @@ async function open(size, platform, theme, { keep = false, state = null, extra =
   await send('Page.navigate', { url });
   // navigate 返回时新页还没接手：只查行会被上一页（它的行还在）骗过去，要先等地址里的时间戳是新页的。
   await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入');
-  await until(`document.querySelectorAll('.row.entry').length > 0`, '目录树出现');
+  await until(`document.querySelectorAll('${ready}').length > 0`, '目录树出现');
   await evaluate(trackRequests);
 }
 // 文件页：query 是额外的参数；等正文或说明区出现。
 async function openFile(size, theme, query = 'session=A&path=notes.txt') {
-  const [w, h, safe] = SIZES[size];
-  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+  const safe = SIZES[size][2];
+  await setViewport(size, 'ios');
   const stamp = Date.now();
   await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${stamp}` });
   await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入'); // 同 open：不能让上一页的正文骗过下面的等待
@@ -146,16 +156,25 @@ async function openFile(size, theme, query = 'session=A&path=notes.txt') {
 }
 // ⋯ 菜单：iPhone 点页内的 ⋯（同步），Mac 照控制页的方式发 { harness: 'toolbar', id: 'more' }（页面收到消息才处理）。
 // 返回时消息已经处理完，菜单已经开了（或再按一次关了）。
-const openMore = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
+const openMore = async platform => {
+  await frames(); // 先让之前设的滚动、改的视口引出的事件都派发完：迟到的滚动、resize 事件会把刚打开的菜单关掉
+  return openMoreNow(platform);
+};
+const openMoreNow = platform => evaluate(platform === 'ios' ? `document.querySelector('[aria-label="更多"]').click()`
   : `new Promise(resolve => { const seen = event => { if (event.data?.harness !== 'toolbar') return; removeEventListener('message', seen); resolve(); }; addEventListener('message', seen); postMessage({ harness: 'toolbar', id: 'more' }, '*'); })`);
-const menuClosed = `document.getElementById('menu').hidden`;
+const menuClosed = `document.getElementById('menu').hidden && document.getElementById('submenu').hidden`;
 // 页面发出的请求都有了回答。
 const settled = what => until(`window.__rpc.open.size === 0`, `${what}：页面发出的请求都有了回答`);
-// 在 ⋯ 菜单里选一项，等到它真正做完：菜单关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
+// ⋯ 菜单的第一层：刷新、显示隐藏文件、「显示」；视图和排序在「显示」里（Mac 放得下时在侧面板 #submenu，放不下和 iPhone 是菜单里的下一层）。
+const ROOT_LABELS = ['刷新', '显示隐藏文件', '显示'];
+// 菜单里现在看得到的按钮里找 label 并点它（JS 的 click，同步）；返回找到没有。
+const clickItem = label => evaluate(`(() => { const item = [...document.querySelectorAll('#menu:not([hidden]) button, #submenu:not([hidden]) button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
+// 在 ⋯ 菜单里选一项，等到它真正做完：菜单（两个面板）关闭，done 成立（选完之后该看到的样子），请求都有了回答。不靠固定睡眠。
 const pick = async (label, platform = 'mac', { done = null, what = '' } = {}) => {
   await openMore(platform);
-  const found = await evaluate(`(() => { const item = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); item?.click(); return item !== undefined; })()`);
-  if (!found) throw new Error(`菜单里没有「${label}」这一项`);
+  if (await evaluate(menuClosed)) throw new Error(`点「${label}」之前菜单就关了（被迟到的滚动、resize 之类的事件关掉）`);
+  if (!ROOT_LABELS.includes(label) && !(await clickItem('显示'))) throw new Error('菜单里没有「显示」这一项');
+  if (!(await clickItem(label))) throw new Error(`菜单里没有「${label}」这一项`);
   await until(menuClosed, `选「${label}」后菜单关闭`);
   if (done) await until(done, what);
   await settled(`选「${label}」后`);
@@ -309,23 +328,44 @@ try {
     check(`iPhone ${size}：说明区下工具条的按钮都点得到，复制路径可用`, usable.reach.length === (land ? 3 : 2) && usable.reach.every(Boolean) && usable.copied === 'notes.txt' && usable.noticeShown, JSON.stringify(usable));
   }
 
-  // ⋯ 菜单：刷新、显示隐藏文件，分隔线，小标题「排序」，名称 / 种类 / 日期 / 大小。两端共用一份内容，宽度随内容，完整在页面内。
+  // ⋯ 菜单：第一层是 刷新、显示隐藏文件、「显示」›；视图和排序在「显示」里。两端共用一份内容，宽度随内容，完整在页面内。
+  // Mac 放得下时「显示」在根面板左边的侧面板（#submenu）里弹出；放不下和 iPhone 一样，在 #menu 里切到下一层（顶上一行返回）。
   // 0.4.0 的菜单最小宽 150 点；iPhone 上 ⋯ 菜单本来就由「显示隐藏文件」撑到 158 点。
-  const MORE_NAMES = ['刷新', '显示隐藏文件', '名称', '种类', '日期', '大小'], MORE_SHAPE = ['BUTTON', 'BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'];
+  const ROOT_NAMES = ['刷新', '显示隐藏文件', '显示'], LAYER_NAMES = ['列表', '图标', '名称', '种类', '日期', '大小'], SORTS = ['名称', '种类', '日期', '大小'];
   const OLD_WIDTH = { mac: 150, ios: 158 };
-  const menuBox = `(() => { const m = document.getElementById('menu'), r = m.getBoundingClientRect(), items = [...m.querySelectorAll('button')];
-    return { shown: !m.hidden, shape: [...m.children].map(x => x.tagName), names: items.map(x => x.textContent), roles: items.map(x => x.getAttribute('role')), checked: items.map(x => x.getAttribute('aria-checked')),
-      marks: items.map(x => x.querySelector('svg') !== null), heads: [...m.querySelectorAll('.menu-head')].map(x => x.textContent), heights: items.map(x => x.getBoundingClientRect().height),
-      textLefts: items.map(x => Math.round(x.lastElementChild.getBoundingClientRect().left * 10) / 10), left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: innerWidth, h: innerHeight,
-      width: Math.round((r.right - r.left) * 10) / 10 }; })()`;
-  // 内容对、两端对齐、完整在安全区内。hidden：显示隐藏文件现在是不是开着。
-  const moreOk = (menu, { sl = 0, sr = 0, hidden = false, sort = '名称' } = {}) => menu.shown && JSON.stringify(menu.shape) === JSON.stringify(MORE_SHAPE) && JSON.stringify(menu.names) === JSON.stringify(MORE_NAMES)
-    && JSON.stringify(menu.heads) === JSON.stringify(['排序']) && menu.roles.join() === 'menuitem,menuitemcheckbox,menuitemradio,menuitemradio,menuitemradio,menuitemradio'
-    && JSON.stringify(menu.checked) === JSON.stringify([null, String(hidden), ...['名称', '种类', '日期', '大小'].map(x => String(x === sort))])
-    && JSON.stringify(menu.marks) === JSON.stringify([false, hidden, ...['名称', '种类', '日期', '大小'].map(x => x === sort)]) && new Set(menu.textLefts).size === 1
-    && menu.left >= sl && menu.right <= menu.w - sr && menu.top >= 0 && menu.bottom <= menu.h;
+  const boxOf = id => `(() => { const m = document.getElementById('${id}'), r = m.getBoundingClientRect(), items = [...m.querySelectorAll('button')];
+    const nameOf = x => [...x.children].find(c => !c.classList.contains('check') && !c.classList.contains('sub-arrow'));
+    return { shown: !m.hidden, shape: [...m.children].map(x => x.tagName), heads: [...m.querySelectorAll('.menu-head')].map(x => x.textContent),
+      items: items.map(x => ({ name: x.textContent, role: x.getAttribute('role'), checked: x.getAttribute('aria-checked'), mark: x.querySelector('.check:not(.back) svg') !== null, back: x.classList.contains('menu-back'),
+        arrow: x.querySelector('.sub-arrow svg') !== null, popup: x.getAttribute('aria-haspopup'), expanded: x.getAttribute('aria-expanded'), h: x.getBoundingClientRect().height, textLeft: Math.round(nameOf(x).getBoundingClientRect().left * 10) / 10 })),
+      left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: innerWidth, h: innerHeight, width: Math.round((r.right - r.left) * 10) / 10, scrolls: m.scrollHeight > m.clientHeight + 1 }; })()`;
+  const menuBox = boxOf('menu'), subBox = boxOf('submenu');
+  const inSafe = (p, { sl = 0, sr = 0, sb = 0 } = {}) => p.left >= sl && p.right <= p.w - sr && p.top >= 0 && p.bottom <= p.h - sb + 0.5;
+  const aligned = p => new Set(p.items.map(x => x.textLeft)).size === 1; // 有对勾位的项，文字都从同一处开始
+  // 第一层：三个项，只有「显示」带箭头和 aria-haspopup；显示隐藏文件是开关，对勾跟着 hidden。
+  const rootOk = (p, { hidden = false, ...safe } = {}) => p.shown && JSON.stringify(p.shape) === '["BUTTON","BUTTON","BUTTON"]' && JSON.stringify(p.items.map(x => x.name)) === JSON.stringify(ROOT_NAMES)
+    && p.items.map(x => x.role).join() === 'menuitem,menuitemcheckbox,menuitem' && JSON.stringify(p.items.map(x => x.checked)) === JSON.stringify([null, String(hidden), null])
+    && JSON.stringify(p.items.map(x => x.mark)) === JSON.stringify([false, hidden, false]) && JSON.stringify(p.items.map(x => x.arrow)) === '[false,false,true]'
+    && JSON.stringify(p.items.map(x => x.popup)) === '[null,null,"menu"]' && aligned(p) && inSafe(p, safe);
+  // 「显示」这一层：小标题「视图」下面列表、图标，分隔线，小标题「排序」下面四项，单选，当前项有对勾。back：在 #menu 里切到下一层时顶上多一行返回和分隔线。
+  const layerOk = (p, { view = 'list', sort = '名称', back = false, ...safe } = {}) => {
+    const items = back ? p.items.slice(1) : p.items;
+    const shape = [...(back ? ['BUTTON', 'HR'] : []), 'P', 'BUTTON', 'BUTTON', 'HR', 'P', 'BUTTON', 'BUTTON', 'BUTTON', 'BUTTON'];
+    return p.shown && JSON.stringify(p.shape) === JSON.stringify(shape) && JSON.stringify(p.heads) === '["视图","排序"]'
+      && (!back || (p.items[0].name === '返回' && p.items[0].back && p.items[0].role === 'menuitem')) && JSON.stringify(items.map(x => x.name)) === JSON.stringify(LAYER_NAMES) && items.every(x => x.role === 'menuitemradio' && !x.arrow)
+      && JSON.stringify(items.map(x => x.checked)) === JSON.stringify(LAYER_NAMES.map(x => String(x === (view === 'icons' ? '图标' : '列表') || x === sort)))
+      && JSON.stringify(items.map(x => x.mark)) === JSON.stringify(LAYER_NAMES.map(x => x === (view === 'icons' ? '图标' : '列表') || x === sort)) && aligned(p) && inSafe(p, safe);
+  };
+  const press = key => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)} }))`);
+  // 悬停：返回这一项的 aria-expanded。给了 probe 表达式就在同一次调用里、派发之后立刻求值，返回 { expanded, probe }：
+  // 悬停会启动 150 毫秒的收起计时器，要读「立刻还在」就不能跨 CDP 调用，机器忙时两次调用之间可能已经过了 150 毫秒。
+  const hover = (label, probe) => evaluate(`(() => { const b = [...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}); b.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
+    ${probe === undefined ? `return b.getAttribute('aria-expanded');` : `return { expanded: b.getAttribute('aria-expanded'), probe: ${probe} };`} })()`);
+  const viewport = setViewport;
+  const gridShown = `getComputedStyle(document.getElementById('grid')).visibility === 'visible' && document.querySelector('#grid .gi') !== null`;
+  const treeShown = `getComputedStyle(document.getElementById('tree')).visibility === 'visible' && document.querySelector('.row.entry') !== null`;
 
-  // iPhone 树页顶部：返回（仅横屏）、根目录名、⋯，没有独立的排序按钮；⋯ 菜单完整在安全区内，项至少 44 点，再次激活只关闭。
+  // iPhone 树页顶部：返回（仅横屏）、根目录名、⋯，没有独立的排序按钮；⋯ 菜单完整在安全区内，项至少 44 点，再次激活只关闭；「显示」在菜单里切到下一层。
   for (const [size, theme] of [['portrait', 'light'], ['landscape', 'light'], ['portrait', 'dark'], ['landscape', 'dark']]) {
     await open(size, 'ios', theme);
     const [sl, sr] = size === 'landscape' ? [59, 59] : [0, 0];
@@ -337,44 +377,140 @@ try {
     await openMore('ios');
     const menu = await evaluate(menuBox);
     const expanded = await evaluate(`document.querySelector('[aria-label="更多"]').getAttribute('aria-expanded')`);
-    check(`iPhone ${size} ${theme}：⋯ 菜单 刷新、显示隐藏文件、分隔线、小标题、四个排序项，项至少 44 点，文字对齐，完整在安全区内，宽 ${menu.width}（0.4.0 是 ${OLD_WIDTH.ios}）`,
-      moreOk(menu, { sl, sr }) && menu.heights.every(x => x >= 44) && expanded === 'true' && menu.width <= OLD_WIDTH.ios, JSON.stringify(menu));
+    check(`iPhone ${size} ${theme}：⋯ 菜单第一层 刷新、显示隐藏文件、「显示」›，项至少 44 点，文字对齐，完整在安全区内，宽 ${menu.width}（0.4.0 是 ${OLD_WIDTH.ios}）`,
+      rootOk(menu, { sl, sr }) && menu.items.every(x => x.h >= 44) && expanded === 'true' && menu.width <= OLD_WIDTH.ios, JSON.stringify(menu));
     await openMore('ios'); // 没有 pointerdown 的再次激活，同键盘
     check(`iPhone ${size} ${theme}：再次激活 ⋯ 只关闭`, await evaluate(`document.getElementById('menu').hidden && document.querySelector('[aria-label="更多"]').getAttribute('aria-expanded') === 'false'`));
     await pickHidden('ios');
     await openMore('ios');
     const hiddenOn = await evaluate(menuBox);
-    check(`iPhone ${size} ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, moreOk(hiddenOn, { sl, sr, hidden: true }), JSON.stringify(hiddenOn));
+    check(`iPhone ${size} ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, rootOk(hiddenOn, { sl, sr, hidden: true }), JSON.stringify(hiddenOn));
     if (size === 'portrait') await shoot(`ios-portrait-${theme}-menu-hidden-on`);
-    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
-    check(`iPhone ${size} ${theme}：按 Escape 关闭菜单`, await evaluate(`document.getElementById('menu').hidden`));
+    // 点「显示」：菜单里切到下一层，#submenu 不出现，顶上一行返回；项至少 44 点，宽度比 0.4.0 的 ⋯ 窄，完整在安全区内。
+    await clickItem('显示');
+    const layer = await evaluate(menuBox);
+    check(`iPhone ${size} ${theme}：点「显示」在菜单里切到下一层（视图、排序，当前项有对勾），顶上一行返回，侧面板不出现，项至少 44 点，宽 ${layer.width}（0.4.0 是 ${OLD_WIDTH.ios}）`,
+      layerOk(layer, { back: true, sl, sr }) && layer.items.every(x => x.h >= 44) && layer.width < OLD_WIDTH.ios && (await evaluate(`document.getElementById('submenu').hidden`)) && !(await evaluate(`document.getElementById('menu').hidden`)), JSON.stringify(layer));
+    await shoot(`ios-${size}-${theme}-menu-display`);
+    await clickItem('返回');
+    check(`iPhone ${size} ${theme}：点返回回到第一层，对勾还在`, rootOk(await evaluate(menuBox), { sl, sr, hidden: true }));
+    await clickItem('显示');
+    // 旋转：整个菜单关闭。
+    await viewport(size === 'portrait' ? 'landscape' : 'portrait', 'ios');
+    await until(menuClosed, '旋转后整个菜单关闭');
+    await viewport(size, 'ios');
+    await pick('图标', 'ios', { done: gridShown, what: '选「图标」后图标视图出现' });
+    await openMore('ios');
+    await clickItem('显示');
+    const iconsLayer = await evaluate(menuBox);
+    check(`iPhone ${size} ${theme}：在图标视图里，下一层的对勾是「图标」`, layerOk(iconsLayer, { view: 'icons', back: true, sl, sr }), JSON.stringify(iconsLayer));
+    if (size === 'portrait') await shoot(`ios-portrait-${theme}-menu-display-icons`);
+    await press('Escape');
+    check(`iPhone ${size} ${theme}：下一层里按 Escape 关闭整个菜单`, await evaluate(menuClosed));
+    await pick('列表', 'ios', { done: treeShown, what: '选「列表」后目录树出现' });
   }
 
-  // Mac 的「更多」：控制页只把项目的 id 发回，这里照它的方式往页面发 { harness: 'toolbar', id }。内容和 iPhone 相同，完整在页面内，贴右上角，宽度比 150 窄，再按一次关闭。
+  // Mac 的「更多」：控制页只把项目的 id 发回，这里照它的方式往页面发 { harness: 'toolbar', id }。第一层内容和 iPhone 相同，完整在页面内，贴右上角，宽度比 150 窄，再按一次关闭。
+  let flySubWidth = 0; // 侧面板的实测宽度：下面判断「窄侧栏里放不下」要用
   for (const theme of ['light', 'dark']) {
     await open('mac', 'mac', theme);
     await openMore('mac');
     const mac = await evaluate(menuBox);
-    check(`Mac ${theme}：「更多」菜单内容和 iPhone 相同，完整在页面内，贴右上角，宽 ${mac.width}（0.4.0 是 ${OLD_WIDTH.mac}）`,
-      moreOk(mac) && mac.w - mac.right <= 8 && mac.top <= 8 && mac.width < OLD_WIDTH.mac, JSON.stringify(mac));
+    check(`Mac ${theme}：「更多」菜单第一层内容和 iPhone 相同，完整在页面内，贴右上角，宽 ${mac.width}（0.4.0 是 ${OLD_WIDTH.mac}）`,
+      rootOk(mac) && mac.w - mac.right <= 8 && mac.top <= 8 && mac.width < OLD_WIDTH.mac, JSON.stringify(mac));
     await shoot(`mac-sidebar-${theme}-menu`);
     await openMore('mac');
-    check(`Mac ${theme}：再按一次「更多」只关闭`, await evaluate(`document.getElementById('menu').hidden`));
+    check(`Mac ${theme}：再按一次「更多」只关闭`, await evaluate(menuClosed));
     await pickHidden('mac');
     await openMore('mac');
     const on = await evaluate(menuBox);
-    check(`Mac ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, moreOk(on, { hidden: true }), JSON.stringify(on));
+    check(`Mac ${theme}：选「显示隐藏文件」后菜单关闭，再打开时对勾在，其余各项仍对齐`, rootOk(on, { hidden: true }), JSON.stringify(on));
     if (theme === 'dark') await shoot('mac-sidebar-dark-menu-hidden-on');
+    await press('Escape');
+
+    // 侧栏 280 点宽：根面板左边放得下，「显示」在左边弹出（鼠标移上去）。
+    await openMore('mac');
+    const before = await evaluate(`document.getElementById('submenu').hidden`);
+    const expandedAfterHover = await hover('显示');
+    const rootBox = await evaluate(menuBox), side = await evaluate(subBox), shownTop = await evaluate(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === '显示').getBoundingClientRect().top`);
+    flySubWidth = side.width;
+    check(`Mac ${theme}：鼠标移到「显示」，在根面板左边弹出侧面板（视图、排序，对勾对），根面板还在，侧面板不超出页面，宽 ${side.width} 比 0.4.0 的 ⋯（${OLD_WIDTH.mac}）窄，贴着「显示」那一项，aria-expanded 展开`,
+      before && layerOk(side) && side.right <= rootBox.left && side.left >= 0 && side.width < OLD_WIDTH.mac && Math.abs(side.top + 5 - shownTop) <= 2 && expandedAfterHover === 'true' && rootOk(rootBox, { hidden: true }), JSON.stringify({ side, rootBox, shownTop }));
+    await shoot(`mac-sidebar-${theme}-menu-flyout`);
+    // 鼠标移到别的项：之后约 150 毫秒才收起（立刻还在），斜着移过去不误关。
+    const { probe: kept } = await hover('刷新', `!document.getElementById('submenu').hidden`); // 派发和读取在同一次调用里，不和 150 毫秒计时器赛跑
+    await until(`document.getElementById('submenu').hidden`, '移到别的项后侧面板收起');
+    check(`Mac ${theme}：鼠标移到别的项，侧面板不是立刻收起，之后收起，「显示」复位`, kept && (await evaluate(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === '显示').getAttribute('aria-expanded')`)) === 'false');
+    // 点击「显示」同样弹出；点里面不算点外面。
+    await clickItem('显示');
+    check(`Mac ${theme}：点「显示」也在左边弹出，菜单不换层`, layerOk(await evaluate(subBox)) && rootOk(await evaluate(menuBox), { hidden: true }));
+    await evaluate(`document.querySelector('#submenu .menu-head').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1 }))`);
+    check(`Mac ${theme}：点侧面板里面不关菜单`, !(await evaluate(`document.getElementById('submenu').hidden`)) && !(await evaluate(`document.getElementById('menu').hidden`)));
+    // 菜单内部的滚动不关；页面里的滚动、Escape、点外面、失焦、窗口尺寸变化都关整个菜单。
+    await evaluate(`document.getElementById('submenu').dispatchEvent(new Event('scroll')); document.getElementById('menu').dispatchEvent(new Event('scroll'))`);
+    await frames();
+    check(`Mac ${theme}：菜单自己的滚动不关菜单`, !(await evaluate(`document.getElementById('submenu').hidden || document.getElementById('menu').hidden`)));
     await evaluate(`document.getElementById('tree').scrollTop = 30`);
     await frames(); // 原生的滚动事件在下一帧派发
-    check(`Mac ${theme}：菜单开着时滚动目录树，菜单关闭`, await evaluate(`document.getElementById('menu').hidden`));
+    check(`Mac ${theme}：侧面板开着时滚动目录树，两个面板都关`, await evaluate(menuClosed));
+    for (const [what, act] of [['按 Escape', `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`], ['点菜单外', `document.querySelector('.row.entry').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1 }))`],
+      ['窗口失焦', `window.dispatchEvent(new Event('blur'))`]]) {
+      await openMore('mac');
+      await clickItem('显示');
+      await evaluate(act);
+      check(`Mac ${theme}：侧面板开着时${what}，两个面板都关`, await evaluate(menuClosed));
+    }
     await openMore('mac');
-    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
-    check(`Mac ${theme}：按 Escape 关闭菜单`, await evaluate(`document.getElementById('menu').hidden`));
+    await clickItem('显示');
+    await viewport('narrow', 'mac'); // 拖窄侧栏：位置对不上了
+    await until(menuClosed, '窗口变窄后整个菜单关闭');
+    check(`Mac ${theme}：侧面板开着时窗口尺寸变化，两个面板都关`, true);
+    await viewport('mac', 'mac');
+    // 选侧面板里的项：整个菜单关闭，图标视图出现；再选「列表」换回。
+    await pick('图标', 'mac', { done: gridShown, what: '选「图标」后图标视图出现' });
     await openMore('mac');
-    await evaluate(`document.querySelector('.row.entry').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1 }))`);
-    check(`Mac ${theme}：点菜单外关闭菜单`, await evaluate(`document.getElementById('menu').hidden`));
+    await hover('显示');
+    check(`Mac ${theme}：图标视图里，侧面板的对勾是「图标」`, layerOk(await evaluate(subBox), { view: 'icons' }));
+    await evaluate(`document.querySelector('#grid .gbody').scrollTop = 30`);
+    await frames();
+    check(`Mac ${theme}：图标视图里侧面板开着时滚动网格，两个面板都关`, await evaluate(menuClosed));
+    await pick('列表', 'mac', { done: treeShown, what: '选「列表」后目录树出现' });
+
+    // 窄侧栏：200 点宽时根面板左边还有 74 点，刚好放得下 70 点宽的侧面板（贴边也不超出页面）；150 点宽放不下，悬停什么都不做，点击在菜单里切到下一层，返回回到第一层。
+    await open('narrow', 'mac', theme);
+    await openMore('mac');
+    const tightRoot = await evaluate(menuBox);
+    await hover('显示');
+    const tight = await evaluate(subBox);
+    check(`Mac ${theme} narrow：根面板左边 ${Math.round(tightRoot.left)} 点，放得下 ${flySubWidth} 点宽的侧面板，照样向左弹出，不超出页面`,
+      tightRoot.left - flySubWidth - 2 >= 0 && layerOk(tight) && tight.left >= 0 && tight.right <= tightRoot.left && tight.width < OLD_WIDTH.mac, JSON.stringify({ tightRoot, tight }));
+    await shoot(`mac-narrow-${theme}-menu-flyout`);
+    await press('Escape');
+    await open('tiny', 'mac', theme);
+    await openMore('mac');
+    const tinyRoot = await evaluate(menuBox);
+    await hover('显示');
+    const hoverOnly = (await evaluate(`document.getElementById('submenu').hidden`)) && rootOk(await evaluate(menuBox));
+    await clickItem('显示');
+    const next = await evaluate(menuBox);
+    check(`Mac ${theme} tiny：根面板左边只有 ${Math.round(tinyRoot.left)} 点，放不下 ${flySubWidth} 点宽的侧面板：悬停不动，点击切到下一层（顶上一行返回），不超出页面，宽 ${next.width}（0.4.0 是 ${OLD_WIDTH.mac}）`,
+      tinyRoot.left - flySubWidth - 2 < 0 && hoverOnly && layerOk(next, { back: true }) && next.width < OLD_WIDTH.mac && (await evaluate(`document.getElementById('submenu').hidden`)), JSON.stringify({ tinyRoot, next, flySubWidth }));
+    await shoot(`mac-tiny-${theme}-menu-display`);
+    await clickItem('返回');
+    check(`Mac ${theme} tiny：点返回回到第一层`, rootOk(await evaluate(menuBox)));
+    await clickItem('显示');
+    await clickItem('图标');
+    await until(`${menuClosed} && ${gridShown}`, '窄侧栏里在下一层选「图标」');
+    await settled('tiny 选「图标」后');
+    await pick('列表', 'mac', { done: treeShown, what: '选「列表」后目录树出现' });
   }
+
+  // 视口很矮（只有 212 点可用）：侧面板和下一层都有高度上限，不超出页面；下一层放不下就在菜单里滚动。
+  await open('short', 'mac', 'light');
+  await openMore('mac');
+  await hover('显示');
+  const shortSide = await evaluate(subBox);
+  check('Mac 视口只有 220 点高：侧面板有高度上限，不超出页面', shortSide.shown && shortSide.top >= 0 && shortSide.bottom <= shortSide.h + 0.5, JSON.stringify(shortSide));
 
   // Mac 的 meta：容器查询指定了查询祖先（#tree）。宽度够时显示（名字截断、meta 不缩），窄于约 220 点时隐藏。
   await open('mac', 'mac', 'light');
@@ -526,11 +662,17 @@ try {
     await until(`!document.getElementById('info').classList.contains('off')`, '点最后一项后属性页出现');
     check(`iPhone ${size} ${theme}：点到的是「属性」：属性页打开，路径很长的完整路径折行不撑出页面`, await evaluate(`(() => { const p = document.getElementById('info'), b = p.querySelector('.pbody'); return b.scrollWidth <= b.clientWidth && getComputedStyle(document.getElementById('tree')).visibility === 'hidden'; })()`));
   }
-  // 高度上限单测：视口只有 220 点高，⋯ 菜单放不下，在菜单里滚动，不超出安全区。
+  // 高度上限单测：视口只有 220 点高。第一层三项放得下；「显示」这一层放不下，在菜单里滚动，不超出安全区，滚到底能点到最后一项。
   await open('short', 'ios', 'light');
   await openMore('ios');
+  const shortRoot = await evaluate(menuInfo);
+  check('iPhone 视口只有 220 点高：⋯ 菜单第一层三项放得下，不超出安全区', !shortRoot.scrolls && shortRoot.top >= 0 && shortRoot.bottom <= shortRoot.h - 21 + 0.5, JSON.stringify(shortRoot));
+  await clickItem('显示');
   const shortMenu = await evaluate(menuInfo);
-  check('iPhone 视口只有 220 点高：⋯ 菜单有高度上限，内容放不下就在菜单里滚动，不超出安全区', shortMenu.scrolls && shortMenu.top >= 0 && shortMenu.bottom <= shortMenu.h - 21 + 0.5, JSON.stringify(shortMenu));
+  check('iPhone 视口只有 220 点高：「显示」这一层有高度上限，内容放不下就在菜单里滚动，不超出安全区', shortMenu.scrolls && shortMenu.top >= 0 && shortMenu.bottom <= shortMenu.h - 21 + 0.5, JSON.stringify(shortMenu));
+  const shortReach = await evaluate(`(() => { const m = document.getElementById('menu'); m.scrollTop = m.scrollHeight; const b = [...m.querySelectorAll('button')].at(-1), r = b.getBoundingClientRect(), mr = m.getBoundingClientRect(),
+    hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { name: b.textContent, inMenu: r.top >= mr.top && r.bottom <= mr.bottom + 0.5, onScreen: r.bottom <= innerHeight - 21 + 0.5, hit: hit?.closest('button') === b }; })()`);
+  check('iPhone 视口只有 220 点高：「显示」这一层滚到底能点到最后一项「大小」', shortReach.name === '大小' && shortReach.inMenu && shortReach.onScreen && shortReach.hit, JSON.stringify(shortReach));
 
   // 属性页：两端两种外观。文件、文件夹（真实统计）、内链接、外链接；iPhone 原生返回，Mac 头部页内返回（有 coda.back 也不声明）；横屏的返回先关属性页。
   const infoRows = `(() => Object.fromEntries([...document.querySelectorAll('#info .irow')].map(r => [r.children[0].textContent, r.children[1].textContent])))()`;
@@ -604,7 +746,7 @@ try {
     return { display: getComputedStyle(b).display, height: r.height, top: r.top, shown: shown.map(x => x.textContent), clickable: shown.map(x => { const q = x.getBoundingClientRect(); return document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2)?.closest('button') === x; }),
       title: b.querySelector('.bar-title')?.textContent ?? null, more: b.querySelector('[aria-label="更多"]') !== null, headTop: document.querySelector('#info .phead')?.getBoundingClientRect().top }; })()`;
   // 只改视口，不重载页面：旋转屏幕。
-  const rotate = size => send('Emulation.setDeviceMetricsOverride', { width: SIZES[size][0], height: SIZES[size][1], deviceScaleFactor: 2, mobile: true });
+  const rotate = size => setViewport(size, 'ios');
   const readTree = async size => {
     const names = await evaluate(phoneBar), box = await evaluate(barBox);
     check(`iPhone ${size}：目录树上工具条是 返回、根目录名、更多`, JSON.stringify(names) === '["exit","title","更多"]' && box.title === 'demo-project' && box.more && box.height >= 44, JSON.stringify({ names, box }));
@@ -824,6 +966,174 @@ try {
       await shoot(`ios-${size}-${theme}-file`);
     }
   }
+
+  // ================= 图标视图（0.6.0）=================
+  // 起点：保存的状态里 view 是 icons（页面真实的恢复路径）；运行中切换走真实的「更多」菜单 →「显示」。
+  const ICONS = { v: 1, seq: 1, hidden: false, view: 'icons', sessions: {} };
+  const openGrid = (size, platform, theme, extra = {}) => open(size, platform, theme, { state: ICONS, ready: '#grid .cell', ...extra });
+  const switchView = view => pick(view === 'icons' ? '图标' : '列表', 'mac', { done: view === 'icons' ? gridShown : treeShown, what: `切到${view === 'icons' ? '图标' : '列表'}视图` });
+  const bodyOf = `document.querySelector('#grid .gbody')`;
+  // 画出来的单元格：宽高、第一行有几个、都在容器横向范围里；列数应是 floor(容器宽 / 单元格宽)。
+  const gridBox = `(() => { const body = ${bodyOf}, cells = [...document.querySelectorAll('#grid .cell')], box = body.getBoundingClientRect(), first = cells[0].getBoundingClientRect();
+    const row0 = cells.filter(c => Math.abs(c.getBoundingClientRect().top - first.top) < 1);
+    return { clientWidth: body.clientWidth, cellW: first.width, cellH: first.height, perRow: row0.length, cols: Math.floor(body.clientWidth / first.width), n: cells.length,
+      inside: cells.every(c => { const r = c.getBoundingClientRect(); return r.left >= box.left - 0.5 && r.right <= box.right + 0.5; }) }; })()`;
+  // 视口里每隔一段取一个点：每一点都该落在某一行单元格或说明项的纵向范围里（没有就是空白，虚拟滚动画少了）。
+  // 内容上下各有 8 点的留白（.gspacer 的外边距），那一段不算内容，不查。
+  const gridCovered = `(() => { const box = ${bodyOf}.getBoundingClientRect(), sp = document.querySelector('#grid .gspacer').getBoundingClientRect(), items = [...document.querySelectorAll('#grid .gi')].map(c => c.getBoundingClientRect()), miss = [];
+    for (let y = Math.max(box.top, sp.top) + 4; y < Math.min(box.bottom, sp.bottom) - 4; y += 8) if (!items.some(r => r.top <= y && y < r.bottom)) miss.push(Math.round(y));
+    return miss; })()`;
+  // 单元格的名字不含图标里的字母（语言类图标是两个字母）：取 .gname；说明项取整段文字。
+  const gridNames = `[...document.querySelectorAll('#grid .gi')].map(c => c.querySelector('.gname')?.textContent ?? c.textContent)`;
+  const clickCell = name => evaluate(`[...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === ${JSON.stringify(name)}).click()`);
+  const gridScroll = () => evaluate(`${bodyOf}.scrollTop`);
+  const setGridScroll = top => evaluate(`(() => { const b = ${bodyOf}; b.scrollTop = ${top}; b.dispatchEvent(new Event('scroll')); return b.scrollTop; })()`);
+  const headName = `document.querySelector('#grid .gname-head')?.textContent`;
+
+  // 两端、两种外观：单元格的尺寸、列数、不超出容器；文件夹是强调色；长名字折两行并截断，单元格高度不变。
+  const GRID_SIZES = [['mac', 'mac', 72], ['narrow', 'mac', 72], ['portrait', 'ios', 88], ['landscape', 'ios', 88]];
+  for (const theme of ['light', 'dark']) {
+    for (const [size, platform, cellW] of GRID_SIZES) {
+      await openGrid(size, platform, theme);
+      const g = await evaluate(gridBox);
+      const label = `图标视图 ${size} ${theme}`;
+      check(`${label}：单元格宽 ${cellW} 点，列数 = floor(容器宽 / ${cellW})，第一行就是这么多个，都在容器里`, g.cellW === cellW && g.perRow === g.cols && g.cols >= 1 && g.inside, JSON.stringify(g));
+      const heights = await evaluate(`(() => { const hs = [...document.querySelectorAll('#grid .cell')].map(c => c.getBoundingClientRect().height); return { min: Math.min(...hs), max: Math.max(...hs), probe: parseFloat(document.querySelector('#grid .gspacer').style.height) / Math.ceil(${ROOT_ROWS} / ${g.cols}) }; })()`);
+      check(`${label}：单元格高度固定，spacer 的高度 = 行数 × 探针量到的高度`, heights.max - heights.min < 0.01 && Math.abs(heights.probe - heights.min) < 0.01, JSON.stringify(heights));
+      const longName = await evaluate(`(() => { const cell = [...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === '${LONG_NAME}'); if (!cell) return null;
+        const name = cell.querySelector('.gname'), n = name.getBoundingClientRect(), c = cell.getBoundingClientRect(), line = parseFloat(getComputedStyle(name).lineHeight);
+        return { lines: Math.round(n.height / line), clipped: name.scrollHeight > name.clientHeight, fits: n.bottom <= c.bottom + 0.5, cellH: c.height }; })()`);
+      // 长名字排在第二页之后的位置：取不到就滚过去再取。
+      if (longName) check(`${label}：长名字折成两行再截断，不撑高单元格`, longName.lines === 2 && longName.clipped && longName.fits, JSON.stringify(longName));
+      check(`${label}：文件夹的图标是强调色，不能打开的条目不上彩色`, await evaluate(`(() => { const dir = getComputedStyle(document.querySelector('#grid .cell.dir .gico')).color, probe = document.createElement('i'); probe.style.color = 'var(--coda-accent)'; document.body.append(probe);
+        const accent = getComputedStyle(probe).color; probe.remove(); const dead = document.querySelector('#grid .cell.dead'); return dir === accent && (!dead || getComputedStyle(dead.querySelector('.gico')).color !== accent); })()`));
+      check(`${label}：目录树面板不可见，网格面板可见`, await evaluate(`getComputedStyle(document.getElementById('tree')).visibility === 'hidden' && getComputedStyle(document.getElementById('grid')).visibility === 'visible'`));
+      if (platform === 'mac') check(`${label}：头部是根目录名，没有返回键`, (await evaluate(headName)) === 'demo-project' && (await evaluate(`document.querySelectorAll('#grid .ghead button').length`)) === 0);
+      else check(`${label}：没有页内头部（原生返回），工具条标题是根目录名`, (await evaluate(`getComputedStyle(document.querySelector('#grid .ghead')).display`)) === 'none' && (await evaluate(`document.querySelector('.bar-title')?.textContent`)) === 'demo-project');
+      await shoot(`grid-${size}-${theme}`);
+    }
+  }
+
+  // 安全区：iPhone 横屏（左右各 59、底 21）。第一列在安全区之外，滚到底最后一行完整可见。
+  await openGrid('landscape', 'ios', 'light');
+  const safe = await evaluate(`(async () => { const b = ${bodyOf}; b.scrollTop = b.scrollHeight; b.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const cells = [...document.querySelectorAll('#grid .cell')], box = b.getBoundingClientRect(), last = cells.at(-1).getBoundingClientRect();
+    return { left: Math.min(...cells.map(c => c.getBoundingClientRect().left)), right: Math.max(...cells.map(c => c.getBoundingClientRect().right)), w: innerWidth, bottom: last.bottom, paneBottom: box.bottom, text: cells.at(-1).textContent }; })()`);
+  check('图标视图 iPhone 横屏：左右留出安全区，滚到底最后一行完整可见（底部安全区之上）', safe.left >= 59 && safe.right <= safe.w - 59 && safe.text.includes('zz-119') && safe.bottom <= safe.paneBottom - 21 + 0.5, JSON.stringify(safe));
+
+  // 真实交互（Mac）：单击进入、头部返回、回去恢复位置；进入时回到顶部。
+  await openGrid('mac', 'mac', 'light');
+  const rootTop = await setGridScroll(240);
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await settled('进入 docs');
+  const entered1 = { scroll: await gridScroll(), back: await evaluate(`document.querySelectorAll('#grid .ghead button[aria-label="返回"]').length`), names: (await evaluate(gridNames)).slice(0, 4) };
+  check('图标视图：单击文件夹进入这一层，头部有返回键和目录名，进入后在顶部', entered1.scroll === 0 && entered1.back === 1 && entered1.names.includes('README.md'), JSON.stringify(entered1));
+  await evaluate(`document.querySelector('#grid .ghead button').click()`);
+  await until(`${headName} === 'demo-project'`, '回到根目录');
+  await frames();
+  check('图标视图：回上一层恢复进去之前的滚动位置，视口里没有空白', (await gridScroll()) === rootTop && (await evaluate(gridCovered)).length === 0, `${await gridScroll()} / ${rootTop}`);
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '再进 docs');
+  await clickCell(LONG_DIR);
+  await until(`${headName} === '${LONG_DIR}'`, '进入长目录名');
+  check('图标视图：头部标题是当前目录名（长名字截断不撑破头部）', await evaluate(`(() => { const h = document.querySelector('#grid .ghead'), n = h.querySelector('.gname-head'); return h.scrollWidth <= h.clientWidth + 1 && n.scrollWidth >= n.clientWidth; })()`));
+  await shoot('grid-mac-nested');
+
+  // 保存和恢复（真实的 setState/getState）：根目录滚到某处、进入 docs，存下之后重新载入，回到 docs，位置在，往上一层回到顶部之外的……（内存的记录没了，回到顶部）。
+  await openGrid('mac', 'mac', 'light');
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
+  await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
+  await until(`${headName} === 'docs' && ${gridNames}.includes('README.md')`, '重新载入后回到 docs，条目到了'); // 标题先于条目出现：要等条目
+  check('图标视图：重新载入后回到保存的目录', (await evaluate(gridNames)).includes('README.md'), JSON.stringify((await evaluate(gridNames)).slice(0, 4)));
+  await evaluate(`document.querySelector('#grid .ghead button').click()`);
+  await until(`${headName} === 'demo-project'`, '往上一层');
+  await frames();
+  check('图标视图：重建后再往上一层回到顶部（上层的记录只在内存里）', (await gridScroll()) === 0);
+
+  // 恢复的位置比内容还大（内容变少）：浏览器夹到能到的最大值，不跳回顶部也不越界。
+  await openGrid('mac', 'mac', 'light');
+  await clickCell('docs');
+  await until(`${headName} === 'docs'`, '进入 docs');
+  await until(`Object.values(JSON.parse(sessionStorage.getItem('harness-state:files') || '{"sessions":{}}').sessions).some(x => x.cwd === 'docs')`, 'cwd 存进保存的状态');
+  await evaluate(`(() => { const key = 'harness-state:files', st = JSON.parse(sessionStorage.getItem(key)); for (const record of Object.values(st.sessions)) record.scroll.grid = 99999; sessionStorage.setItem(key, JSON.stringify(st)); })()`);
+  await open('mac', 'mac', 'light', { keep: true, ready: '#grid .gi' });
+  await until(`${headName} === 'docs' && ${gridNames}.includes('README.md')`, '重新载入后回到 docs，条目到了'); // 标题先于条目出现：要等条目
+  await frames();
+  const clamped = await evaluate(`(() => { const b = ${bodyOf}; return { top: b.scrollTop, max: b.scrollHeight - b.clientHeight }; })()`);
+  check('图标视图：恢复的位置大于内容时用能到的最大值（不越界）', clamped.top === clamped.max && clamped.top >= 0, JSON.stringify(clamped));
+
+  // 两种视图各自的滚动位置：列表滚到某处，切到图标再滚，换回去两边都在；展开状态在。
+  await open('mac', 'mac', 'light');
+  const listTop = await evaluate(`(() => { const p = document.getElementById('tree'); p.scrollTop = 300; p.dispatchEvent(new Event('scroll')); return p.scrollTop; })()`);
+  await switchView('icons');
+  await until(`${gridNames}.length > 0`, '图标视图出现');
+  await frames();
+  const gridTop = await setGridScroll(200);
+  await switchView('list');
+  await until(`getComputedStyle(document.getElementById('tree')).visibility === 'visible'`, '换回列表');
+  await frames();
+  check('图标视图：切换视图，列表的滚动位置还在', (await evaluate(`document.getElementById('tree').scrollTop`)) === listTop && (await evaluate(covered)).length === 0, String(await evaluate(`document.getElementById('tree').scrollTop`)));
+  await switchView('icons');
+  await until(`getComputedStyle(document.getElementById('grid')).visibility === 'visible'`, '换回图标');
+  await frames();
+  check('图标视图：换回图标，网格的滚动位置还在，视口里没有空白', (await gridScroll()) === gridTop && (await evaluate(gridCovered)).length === 0, `${await gridScroll()} / ${gridTop}`);
+
+  // iPhone 原生返回：路径只声明一处，on(back) 按 steps 退层（控制页的返回按钮发 { harness: 'back' }，steps 恒为 1）。
+  await openGrid('portrait', 'ios', 'light');
+  await clickCell('docs');
+  await until(`${gridNames}.includes('README.md')`, '进入 docs');
+  await clickCell(LONG_DIR);
+  await until(`${gridNames}.includes('${LONG_SUB}')`, '进入长目录');
+  const backs = await evaluate(`window.__backs`);
+  check('图标视图 iPhone：coda.back 声明上层的标题（由远到近，不含当前页）', JSON.stringify(backs.at(-1)) === JSON.stringify(['demo-project', 'docs']), JSON.stringify(backs));
+  await evaluate(`postMessage({ harness: 'back' }, '*')`);
+  await until(`document.querySelector('.bar-title').textContent === 'docs'`, '原生返回退了一层');
+  check('图标视图 iPhone：原生返回退一层，工具条标题跟着变，路径重新声明', JSON.stringify((await evaluate(`window.__backs`)).at(-1)) === JSON.stringify(['demo-project']) && (await evaluate(gridNames)).includes('README.md'));
+  await shoot('grid-ios-nested');
+  await openGrid('landscape', 'ios', 'light');
+  await clickCell('docs');
+  await until(`${gridNames}.includes('README.md')`, '横屏进入 docs');
+  await evaluate(`document.querySelector('.bar .exit').click()`);
+  await until(`${gridNames}.includes('zz-000.txt') || ${gridNames}.includes('src')`, '横屏返回退一层');
+  check('图标视图 iPhone 横屏：页内返回先退目录，不关视图', (await evaluate(`window.__backs`)).length >= 1 && !(await evaluate(gridNames)).includes('README.md'));
+
+  // ---- 两万条：节点数、滚动、进入目录的耗时 ----
+  await mkdir(join(bulkRoot, 'bulk'), { recursive: true });
+  await mkdir(join(bulkRoot, 'small'), { recursive: true });
+  await writeFile(join(bulkRoot, 'small', 'x.txt'), 'x');
+  for (let from = 0; from < BULK; from += 500) await Promise.all(Array.from({ length: Math.min(500, BULK - from) }, (_, i) => writeFile(join(bulkRoot, 'bulk', `item-${String(from + i).padStart(5, '0')}.txt`), '')));
+  await openGrid('mac', 'mac', 'light');
+  await fetch(`${serverUrl}ctl?action=session:B`); // 会话 B 的根目录是 bulk-project
+  await until(`${gridNames}.includes('bulk')`, '会话 B 的根目录');
+  await settled('会话 B');
+  const entered = await evaluate(`(async () => { const t0 = performance.now(); [...document.querySelectorAll('#grid .cell')].find(c => c.querySelector('.gname').textContent === 'bulk').click();
+    while (![...document.querySelectorAll('#grid .cell')].some(c => c.querySelector('.gname').textContent.startsWith('item-'))) await new Promise(r => requestAnimationFrame(r));
+    return performance.now() - t0; })()`);
+  // 一页（96 KiB）放不下 2 万条：翻到底。
+  for (let i = 0; i < 80; i++) {
+    const height = await evaluate(`parseFloat(document.querySelector('#grid .gspacer').style.height)`);
+    const clicked = await evaluate(`(async () => { const b = ${bodyOf}; b.scrollTop = b.scrollHeight; b.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const more = document.querySelector('#grid .gnote.more'); if (!more) return false; more.click(); return true; })()`);
+    if (!clicked) break;
+    await until(`parseFloat(document.querySelector('#grid .gspacer').style.height) > ${height}`, '翻页后的新一页');
+  }
+  const total = await evaluate(`(() => { const sp = document.querySelector('#grid .gspacer'), cell = document.querySelector('#grid .cell').getBoundingClientRect().height, cols = Math.floor(${bodyOf}.clientWidth / 72);
+    return { rows: Math.round(parseFloat(sp.style.height) / cell), expected: Math.ceil(${BULK} / cols), cols }; })()`);
+  check(`图标视图：${BULK} 条全部翻出来，总高度就是 ceil(n / 列数) 行`, total.rows === total.expected, JSON.stringify(total));
+  let maxNodes = 0, blank = [];
+  for (const fraction of [0, 0.13, 0.37, 0.5, 0.71, 0.99, 1]) {
+    await evaluate(`(() => { const b = ${bodyOf}; b.scrollTop = (b.scrollHeight - b.clientHeight) * ${fraction}; b.dispatchEvent(new Event('scroll')); })()`);
+    await frames();
+    maxNodes = Math.max(maxNodes, await evaluate(`document.querySelectorAll('#grid .gi').length`));
+    blank.push(...(await evaluate(gridCovered)));
+  }
+  check(`图标视图：${BULK} 条滚过 7 个位置，视口里没有空白`, blank.length === 0, JSON.stringify(blank));
+  check(`图标视图：${BULK} 条时画出的节点数有上限（可见的一段加上下各 2 行）`, maxNodes > 0 && maxNodes <= 3 * 40, String(maxNodes));
+  console.log(`数字（本机无头 Chrome，不是 WKWebView）：${BULK} 条目录，Mac 侧栏 ${total.cols} 列，滚动时最多 ${maxNodes} 个节点，进入目录到第一屏出现 ${Math.round(entered)} 毫秒`);
+  await fetch(`${serverUrl}ctl?action=session:A`);
   exitCode = failures.length ? 1 : 0;
   keepShots = true;
   console.log(`截图：${shots}`);

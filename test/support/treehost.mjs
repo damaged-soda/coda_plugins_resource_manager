@@ -7,13 +7,16 @@ import { loadApp } from './dom.mjs';
 import { flush } from './fake.mjs';
 
 export async function openTree(t, { platform = 'ios', listing = { '': ['a.txt', 'b.txt'] }, state, coda = {}, back = false } = {}) {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try { t.mock.timers.enable({ apis: ['setTimeout'] }); } catch { /* 同一个用例里的第二个页面（重建）：已经启用了 */ }
   const sent = [], calls = { open: [], copy: [], back: [] }, events = {};
-  const host = { sent, calls, events, listing, failing: new Set(), generation: 0, openResult: undefined, lists: () => sent.filter(m => m.type === 'list') };
+  // missing：这些目录 list 回答 not_found；held：这些目录的 list 先扣住，测试自己用 host.answer 回答，扣住的请求在 host.heldLists 里。
+  const host = { sent, calls, events, listing, failing: new Set(), missing: new Set(), held: new Set(), heldLists: [], generation: 0, openResult: undefined, lists: () => sent.filter(m => m.type === 'list') };
   let page;
   const answer = request => {
     if (request.generation !== host.generation) return;
     const base = { generation: host.generation, requestId: request.requestId };
+    if (host.held.has(request.path)) return host.heldLists.push(request);
+    if (host.missing.has(request.path)) return page.post({ type: 'listed', ...base, error: { code: 'not_found', message: '文件夹不存在' } });
     if (host.failing.has(request.path)) return page.post({ type: 'listed', ...base, error: { code: 'io_error', message: '读不了这个目录' } });
     const entries = (host.listing[request.path] ?? []).map(name => typeof name === 'object' ? name : ({ name: name.replace(/\/$/, ''), kind: name.endsWith('/') ? 'dir' : 'file' }));
     page.post({ type: 'listed', ...base, entries, nextCursor: null });
