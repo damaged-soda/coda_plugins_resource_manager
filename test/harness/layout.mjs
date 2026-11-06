@@ -399,7 +399,7 @@ try {
   const OLD_WIDTH = { mac: 150, ios: 158 };
   const boxOf = id => `(() => { const m = document.getElementById('${id}'), r = m.getBoundingClientRect(), items = [...m.querySelectorAll('button')];
     const nameOf = x => [...x.children].find(c => !c.classList.contains('check') && !c.classList.contains('sub-arrow'));
-    return { shown: !m.hidden, shape: [...m.children].map(x => x.tagName), heads: [...m.querySelectorAll('.menu-head')].map(x => x.textContent),
+    return { shown: !m.hidden, shape: [...m.children].map(x => x.tagName), heads: [...m.querySelectorAll('.menu-head')].map(x => x.textContent), headLefts: [...m.querySelectorAll('.menu-head')].map(x => Math.round([...x.children].find(c => !c.classList.contains('check')).getBoundingClientRect().left * 10) / 10),
       items: items.map(x => ({ name: x.textContent, role: x.getAttribute('role'), checked: x.getAttribute('aria-checked'), mark: x.querySelector('.check:not(.back) svg') !== null, back: x.classList.contains('menu-back'),
         arrow: x.querySelector('.sub-arrow svg') !== null, popup: x.getAttribute('aria-haspopup'), expanded: x.getAttribute('aria-expanded'), h: x.getBoundingClientRect().height, textLeft: Math.round(nameOf(x).getBoundingClientRect().left * 10) / 10 })),
       left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: innerWidth, h: innerHeight, width: Math.round((r.right - r.left) * 10) / 10, scrolls: m.scrollHeight > m.clientHeight + 1 }; })()`;
@@ -420,6 +420,9 @@ try {
       && JSON.stringify(items.map(x => x.checked)) === JSON.stringify(LAYER_NAMES.map(x => String(x === (view === 'icons' ? '图标' : '列表') || x === sort)))
       && JSON.stringify(items.map(x => x.mark)) === JSON.stringify(LAYER_NAMES.map(x => x === (view === 'icons' ? '图标' : '列表') || x === sort)) && aligned(p) && inSafe(p, safe);
   };
+  // 小标题的文字和选项的文字左边对齐（真实布局量出来，差不超过 1 像素）；back 那一行的文字不在选项的列里，不算。
+  const headGap = p => Math.max(...p.headLefts.flatMap(left => p.items.filter(x => !x.back).map(x => Math.abs(x.textLeft - left))));
+  const headAligned = async (label, p) => { const gap = headGap(p); console.log(`小标题对齐：${label} 最大差 ${gap.toFixed(1)} 像素`); check(`${label}：小标题「视图」「排序」的文字和选项的文字左边对齐，差 ${gap.toFixed(1)} 像素（不超过 1）`, p.headLefts.length === 2 && gap <= 1, JSON.stringify(p)); };
   const press = key => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)} }))`);
   // 悬停：返回这一项的 aria-expanded。给了 probe 表达式就在同一次调用里、派发之后立刻求值，返回 { expanded, probe }：
   // 悬停会启动 150 毫秒的收起计时器，要读「立刻还在」就不能跨 CDP 调用，机器忙时两次调用之间可能已经过了 150 毫秒。
@@ -455,6 +458,7 @@ try {
     const layer = await evaluate(menuBox);
     check(`iPhone ${size} ${theme}：点「显示」在菜单里切到下一层（视图、排序，当前项有对勾），顶上一行返回，侧面板不出现，项至少 44 点，宽 ${layer.width}（0.4.0 是 ${OLD_WIDTH.ios}）`,
       layerOk(layer, { back: true, sl, sr }) && layer.items.every(x => x.h >= 44) && layer.width < OLD_WIDTH.ios && (await evaluate(`document.getElementById('submenu').hidden`)) && !(await evaluate(`document.getElementById('menu').hidden`)), JSON.stringify(layer));
+    await headAligned(`iPhone ${size} ${theme} 下一层`, layer);
     await shoot(`ios-${size}-${theme}-menu-display`);
     await clickItem('返回');
     check(`iPhone ${size} ${theme}：点返回回到第一层，对勾还在`, rootOk(await evaluate(menuBox), { sl, sr, hidden: true }));
@@ -508,6 +512,7 @@ try {
     // 点击「显示」同样弹出；点里面不算点外面。
     await clickItem('显示');
     check(`Mac ${theme}：点「显示」也在左边弹出，菜单不换层`, layerOk(await evaluate(subBox)) && rootOk(await evaluate(menuBox), { hidden: true }));
+    await headAligned(`Mac ${theme} 侧面板`, await evaluate(subBox));
     await evaluate(`document.querySelector('#submenu .menu-head').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerId: 1 }))`);
     check(`Mac ${theme}：点侧面板里面不关菜单`, !(await evaluate(`document.getElementById('submenu').hidden`)) && !(await evaluate(`document.getElementById('menu').hidden`)));
     // 菜单内部的滚动不关；页面里的滚动、Escape、点外面、失焦、窗口尺寸变化都关整个菜单。
@@ -559,6 +564,7 @@ try {
     const next = await evaluate(menuBox);
     check(`Mac ${theme} tiny：根面板左边只有 ${Math.round(tinyRoot.left)} 点，放不下 ${flySubWidth} 点宽的侧面板：悬停不动，点击切到下一层（顶上一行返回），不超出页面，宽 ${next.width}（0.4.0 是 ${OLD_WIDTH.mac}）`,
       tinyRoot.left - flySubWidth - 2 < 0 && hoverOnly && layerOk(next, { back: true }) && next.width < OLD_WIDTH.mac && (await evaluate(`document.getElementById('submenu').hidden`)), JSON.stringify({ tinyRoot, next, flySubWidth }));
+    await headAligned(`Mac ${theme} 放不下切到下一层`, next);
     await shoot(`mac-tiny-${theme}-menu-display`);
     await clickItem('返回');
     check(`Mac ${theme} tiny：点返回回到第一层`, rootOk(await evaluate(menuBox)));
@@ -1249,7 +1255,7 @@ try {
     await shoot(`hl-${shot}-${theme}`);
   }
 
-  // 打开耗时：四种固定样本，每种恰好是上限（HIGHLIGHT_LIMIT）字节。每种开一个新页面，首次是页面里第一次，重复是紧接着再来一次。
+  // 打开耗时：三种固定样本，每种恰好是上限（HIGHLIGHT_LIMIT）字节。每种开一个新页面，首次是页面里第一次，重复是紧接着再来一次。
   // 计时从调用库开始：高亮、解析成节点、放进页面、强制排版（getBoundingClientRect），和 show() 里的步骤相同。
   const timing = name => `(async () => {
     const enc = new TextEncoder(), LIMIT = ${HIGHLIGHT_LIMIT};
@@ -1258,7 +1264,6 @@ try {
       'JS': [fit('function add(a, b) { const s = "str" + a; // note\\n  return /re+/.test(s) ? b * 2 : \`t\${a}\`; }\\nclass K extends Q { static x = 1; get v() { return this.x ?? null; } }\\n'), 'javascript'],
       'JSON（密集）': [fit('{"id":12345,"name":"abc","tags":["a","b","c"],"ok":true,"n":null,"v":1.5e3},\\n'), 'json'],
       '多字节': [fit('// 你好，世界 😀 这是一段中文注释\\nconst 名字 = "你好世界 🌍"; function 问候(用户) { return \`你好 \${用户}\`; }\\n'), 'javascript'],
-      '一整行': ['[' + fit('{"k":"v","n":[1,2,3],"t":true},').slice(1), 'json'],
     };
     const [text, language] = samples[${JSON.stringify(name)}];
     const { highlight, appendAll } = await import('/view/highlight.mjs');
@@ -1272,18 +1277,26 @@ try {
     return { bytes: enc.encode(text).length, first, again, spans: body.querySelectorAll('span').length };
   })()`;
   const times = {};
-  for (const name of ['JS', 'JSON（密集）', '多字节', '一整行']) {
+  for (const name of ['JS', 'JSON（密集）', '多字节']) {
     await openFile('window', 'light', 'session=A&path=assets/sample.js', 'mac');
     await until(`document.querySelector('.text .hljs-keyword')`, '计时页出现');
     times[name] = await evalStrict(timing(name));
     const t = times[name];
     console.log(`数字（本机无头 Chrome）：${name} ${t.bytes} 字节，${t.spans} 个 span：首次 ${t.first.total.toFixed(0)} 毫秒（其中调库 ${t.first.library.toFixed(0)}），重复 ${t.again.total.toFixed(0)} 毫秒（其中调库 ${t.again.library.toFixed(0)}）`);
   }
-  check('高亮：四种样本都恰好是上限那么多字节，上色后文字等于原文', Object.values(times).every(t => t.bytes === HIGHLIGHT_LIMIT && t.first.same && t.again.same), JSON.stringify(times));
+  check('高亮：三种样本都恰好是上限那么多字节，上色后文字等于原文', Object.values(times).every(t => t.bytes === HIGHLIGHT_LIMIT && t.first.same && t.again.same), JSON.stringify(times));
   const firsts = Object.fromEntries(Object.entries(times).map(([k, t]) => [k, Math.round(t.first.total)]));
   check(`高亮：三种常见样本（JS、密集 JSON、多字节）${HIGHLIGHT_LIMIT / 1024} KiB 的首次打开都不超过 150 毫秒`, ['JS', 'JSON（密集）', '多字节'].every(name => times[name].first.total <= 150), JSON.stringify(firsts));
-  // 一整行的 JSON 是病态样本（上限那么多字节压成一行，几万个内联 span 要整行排版），实测在 128 KiB 时仍超过 150 毫秒；这里只拦住更坏的退化，数字报告给主会话定。
-  check(`高亮：一整行的 ${HIGHLIGHT_LIMIT / 1024} KiB 病态样本首次打开不超过 300 毫秒（已知超过 150 毫秒，见交付说明）`, times['一整行'].first.total <= 300, JSON.stringify(firsts));
+  // 一整行（压成一行的 JSON，恰好 HIGHLIGHT_LIMIT 字节）不上色：显示纯文本，元信息注明「行太长，不高亮」，不再量上色耗时。
+  await writeFile(join(fixture, 'assets', 'oneline.json'), '[' + '{"k":"v","n":[1,2,3],"t":true},'.repeat(Math.floor((HIGHLIGHT_LIMIT - 2) / 31)).slice(0, -1).padEnd(HIGHLIGHT_LIMIT - 2, ' ') + ']');
+  for (const theme of ['light', 'dark']) {
+    await openFile('window', theme, 'session=A&path=assets/oneline.json', 'mac');
+    await until(`document.querySelector('.pmeta')?.textContent.includes('不高亮')`, '一整行样本的说明出现');
+    const one = await evalStrict(`({ meta: document.querySelector('.pmeta').textContent, spans: document.querySelectorAll('.text span').length, plain: document.querySelector('.text').childNodes.length === 1 && document.querySelector('.text').firstChild.nodeType === 3,
+      length: document.querySelector('.text').textContent.length, lines: document.querySelector('.gutter').textContent.split('\\n').length })`);
+    check(`高亮 ${theme}：一整行的 ${HIGHLIGHT_LIMIT / 1024} KiB 样本显示纯文本（一个文本节点、没有 span），元信息注明「行太长，不高亮」`,
+      one.spans === 0 && one.plain && one.length === HIGHLIGHT_LIMIT && one.lines === 1 && one.meta.endsWith(' · 行太长，不高亮') && !one.meta.includes('没能'), JSON.stringify(one));
+  }
 
   // 真实选区（Mac 侧栏，上色的文件）：真实的 Range 起点和终点落在不同 token、嵌套 span 里、跨行、从行号列拖进来、结尾在下一行行首。
   await openSidebarSample('light');

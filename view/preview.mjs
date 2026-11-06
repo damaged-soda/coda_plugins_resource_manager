@@ -1,7 +1,7 @@
 // 文件预览：只接收路径和读块的能力，不依赖树的状态。readFile 是纯逻辑；mountPreview 才碰 DOM。
 import { h } from './dom.mjs';
 import { formatSize } from './format.mjs';
-import { HIGHLIGHT_LIMIT, appendAll, highlight } from './highlight.mjs';
+import { HIGHLIGHT_LIMIT, appendAll, hasLongLine, highlight } from './highlight.mjs';
 import { icon, iconFor } from './icons.mjs';
 import { languageOf } from './languages.mjs';
 import { ContentKind, EntryKind, ErrorCode, IMAGE_LIMIT, TEXT_LIMIT, imageType } from './protocol.mjs';
@@ -94,8 +94,10 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
     const lines = result.kind === ContentKind.TEXT ? `${lineCount(result.text)} 行` : '';
     const language = result.kind === ContentKind.TEXT ? languageOf(path.split('/').pop()) : null;
-    const colored = language && result.bytes.length <= HIGHLIGHT_LIMIT ? highlight(result.text, language) : null;
-    const plain = !language ? '' : result.bytes.length > HIGHLIGHT_LIMIT ? '不高亮' : colored ? '' : '没能高亮';
+    // 先判大小，超过只写「不高亮」；没超再判行长。
+    const skip = !language ? '' : result.bytes.length > HIGHLIGHT_LIMIT ? '不高亮' : hasLongLine(result.text) ? '行太长，不高亮' : '';
+    const colored = language && !skip ? highlight(result.text, language) : null;
+    const plain = !language ? '' : skip || (colored ? '' : '没能高亮');
     const note = [result.truncated ? `只显示前 ${formatSize(TEXT_LIMIT)}` : '', plain].filter(Boolean).join('，');
     setMeta([dir, lines, formatSize(result.size), note].filter(Boolean).join(' · '), `修改于 ${formatTime(result.mtimeMs)}`);
     if (result.kind === ContentKind.TEXT) {

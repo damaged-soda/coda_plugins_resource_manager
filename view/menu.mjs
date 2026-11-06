@@ -28,7 +28,13 @@ export function mountMenu(el, sub = null, { flyout = false } = {}) {
     return items.map(item => {
       const { label, run, checked, radio, separator, heading, submenu } = item;
       if (separator) return Object.assign(document.createElement('hr'), { className: 'menu-sep' });
-      if (heading !== undefined) return Object.assign(document.createElement('p'), { className: 'menu-head secondary caption', textContent: heading });
+      if (heading !== undefined) {
+        // 小标题和选项走同一套布局：这一层有对勾列时，小标题前也放一个同宽的空位，文字才和选项的文字左边对齐。
+        const head = Object.assign(document.createElement('p'), { className: 'menu-head secondary caption' });
+        if (checkable) head.append(Object.assign(document.createElement('span'), { className: 'check' }));
+        head.append(Object.assign(document.createElement('span'), { textContent: heading }));
+        return head;
+      }
       const button = document.createElement('button'), name = document.createElement('span');
       name.textContent = label;
       if (checkable) {

@@ -371,3 +371,20 @@ test('shown 辅助：只数看得到的面板', async t => {
   hover(root('显示'));
   assert.equal(shown(page).length, 9);
 });
+
+test('小标题和选项同层：这一层有对勾列时，小标题前有同宽的空位（.check），文字在选项的文字之前同样的位置', async t => {
+  for (const [platform, room] of [['mac', true], ['mac', false], ['ios', false]]) {
+    const { page, more, root } = await start(t, { platform, room });
+    more();
+    root('显示').dispatch('click');
+    const layer = visible(page.submenu) ? page.submenu : page.menu;
+    const heads = layer.find(node => node.tagName === 'P');
+    assert.deepEqual(heads.map(node => node.textContent), ['视图', '排序'], platform);
+    for (const head of heads) {
+      assert.deepEqual(head.children.map(node => node.className), ['check', ''], `${platform}${room ? ' 侧面板' : ''}：空位在文字之前`);
+      assert.equal(head.children[0].children.length, 0, '空位里没有对勾');
+    }
+    const option = buttonsOf(layer).find(node => node.textContent === '列表');
+    assert.equal(option.children[0].className, 'check', '选项的对勾列用的是同一个类');
+  }
+});

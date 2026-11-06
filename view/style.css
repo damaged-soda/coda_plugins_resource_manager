@@ -151,7 +151,7 @@ button.icon svg { display: block; }
 .menu-path { padding: 4px 8px 6px; overflow-wrap: anywhere; }
 .menu-info { padding: 0 8px 6px; margin-top: -4px; white-space: nowrap; }
 .menu-sep { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
-.menu-head { padding: 4px 8px 2px; font-weight: 600; }
+.menu-head { display: flex; align-items: center; gap: 4px; padding: 4px 8px 2px; font-weight: 600; } /* 和 .menu button 同样的 flex 与 gap，空位用 .check */
 .pmeta.warn { color: var(--coda-orange, #b25000); }
 
 /* 底部的短提示：普通的是前景色（成功），.warn 是橙色（失败）。 */

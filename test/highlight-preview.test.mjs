@@ -2,7 +2,7 @@
 // 真实的 file-app.mjs、preview.mjs 和 highlight.js，配假 DOM 和脚本化的假宿主。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hljs, HIGHLIGHT_LIMIT } from '../view/highlight.mjs';
+import { hljs, HIGHLIGHT_LIMIT, LINE_LIMIT } from '../view/highlight.mjs';
 import { TEXT_LIMIT } from '../view/protocol.mjs';
 import { flush } from './support/fake.mjs';
 import { start } from './support/filepage.mjs';
@@ -14,8 +14,10 @@ const body = page => page.preview.find(node => node.classList.contains('pbody'))
 const text = page => page.preview.find(node => node.classList.contains('text'))[0];
 const classesIn = page => new Set(text(page).find(node => node.tagName === 'SPAN').flatMap(node => node.className.split(' ')));
 const SOURCE = 'const a = `x${1}`;\nlet b = "y"; // z\n';
-// 恰好 bytes 个字节的 JS 注释：高亮后只有一个 span。
-const comment = bytes => `//${'a'.repeat(bytes - 2)}`;
+// 恰好 bytes 个字节的 JS 注释：一行 100 字节、每行一个 span，没有长行。
+const comment = bytes => { const row = `//${'a'.repeat(97)}\n`; return (row.repeat(Math.ceil(bytes / 100))).slice(0, bytes); };
+// 恰好 bytes 个字节的单行 JS 注释。
+const oneLine = bytes => `//${'a'.repeat(bytes - 2)}`;
 
 test('认得出的语言上色：出 span，文字拼起来等于原文，行号照旧', async t => {
   const { page } = await start(t, { path: 'src/app.js', files: { 'src/app.js': { text: SOURCE } } });
@@ -50,10 +52,10 @@ test('上限按字节算，不按字符：多字节字符的文件字符数少�
 });
 
 test('超过 1 MiB 只读前 1 MiB：说明合成「只显示前 1.0 MiB，不高亮」', async t => {
-  const { page } = await start(t, { path: 'huge.js', files: { 'huge.js': { text: comment(TEXT_LIMIT), size: 2 * TEXT_LIMIT } } });
+  const { page } = await start(t, { path: 'huge.js', files: { 'huge.js': { text: oneLine(TEXT_LIMIT), size: 2 * TEXT_LIMIT } } });
   assert.equal(meta(page).textContent, '1 行 · 2.0 MiB · 只显示前 1.0 MiB，不高亮');
   assert.equal(text(page).find(node => node.tagName === 'SPAN').length, 0);
-  const plain = await start(t, { path: 'huge.txt', files: { 'huge.txt': { text: comment(TEXT_LIMIT), size: 2 * TEXT_LIMIT } } });
+  const plain = await start(t, { path: 'huge.txt', files: { 'huge.txt': { text: oneLine(TEXT_LIMIT), size: 2 * TEXT_LIMIT } } });
   assert.equal(meta(plain.page).textContent, '1 行 · 2.0 MiB · 只显示前 1.0 MiB', '认不出语言的截断文件不加「不高亮」');
 });
 
@@ -146,4 +148,61 @@ test('上色后选中：起点和终点在不同 token、嵌套 span 里、跨�
     await flush();
     assert.deepEqual(adds().slice(-2), [{ text: content, block: true }, { text: position, block: false }], note);
   }
+});
+
+// ---- 行太长不高亮（LINE_LIMIT，按 UTF-16 长度，\n 分行，\r 留在行里） ----
+const noteOf = page => meta(page).textContent;
+const spans = page => text(page).find(node => node.tagName === 'SPAN').length;
+const open = (t, name, body, extra = {}) => start(t, { path: name, files: { [name]: { text: body, ...extra } } });
+
+test('行长：LINE_LIMIT 前一个、恰好上色，后一个字符显示纯文本并注明「行太长，不高亮」', async t => {
+  assert.equal(LINE_LIMIT, 5000);
+  for (const [chars, colored] of [[LINE_LIMIT - 1, true], [LINE_LIMIT, true], [LINE_LIMIT + 1, false]]) {
+    const body = oneLine(chars);
+    const { page } = await open(t, 'one.js', body);
+    assert.equal(spans(page) > 0, colored, `${chars} 字符`);
+    assert.equal(text(page).textContent, body);
+    assert.ok(noteOf(page).endsWith(' · 行太长，不高亮') === !colored, noteOf(page));
+    if (colored) assert.ok(!noteOf(page).includes('不高亮'));
+  }
+});
+
+test('行长：只有 \r\n 的行，\r 算在行里（正文 LINE_LIMIT 个字符 + \r 即超限）', async t => {
+  const rows = n => `//${'a'.repeat(n - 2)}\r\n//b\r\n`;
+  const fine = await open(t, 'crlf.js', rows(LINE_LIMIT - 1)); // 加上 \r 恰好 LINE_LIMIT
+  assert.ok(spans(fine.page) > 0 && !noteOf(fine.page).includes('不高亮'), noteOf(fine.page));
+  const over = await open(t, 'crlf2.js', rows(LINE_LIMIT)); // 加上 \r 是 LINE_LIMIT + 1
+  assert.equal(spans(over.page), 0);
+  assert.ok(noteOf(over.page).endsWith('行太长，不高亮'), noteOf(over.page));
+  const many = await open(t, 'many.js', '//短\r\n'.repeat(3000)); // 总长远超，但每行都短
+  assert.ok(spans(many.page) > 0, '多行总长超过 LINE_LIMIT 不算长行');
+});
+
+test('行长：长行在中间、在末尾（末尾没有换行）都不高亮；长行之外的短行不影响', async t => {
+  const long = oneLine(LINE_LIMIT + 1);
+  for (const body of [`//a\n${long}\n//b\n`, `//a\n//b\n${long}`, `${long}\n//a`]) {
+    const { page } = await open(t, 'mid.js', body);
+    assert.equal(spans(page), 0);
+    assert.equal(text(page).textContent, body);
+    assert.ok(noteOf(page).endsWith(' · 行太长，不高亮'), noteOf(page));
+  }
+  const tail = await open(t, 'tail.js', `//a\n${oneLine(LINE_LIMIT)}`); // 末尾行恰好 LINE_LIMIT
+  assert.ok(spans(tail.page) > 0);
+});
+
+test('行长：按 UTF-16 长度，不按字节也不按码点', async t => {
+  const cjk = await open(t, 'zh.js', `//${'你'.repeat(LINE_LIMIT - 2)}`); // 字节远超 LINE_LIMIT，字符数恰好
+  assert.ok(spans(cjk.page) > 0, noteOf(cjk.page));
+  const emoji = await open(t, 'emoji.js', `//${'😀'.repeat(LINE_LIMIT / 2)}`); // 码点 2501，UTF-16 长度 5002
+  assert.equal(spans(emoji.page), 0);
+  assert.ok(noteOf(emoji.page).endsWith('行太长，不高亮'), noteOf(emoji.page));
+});
+
+test('行长：超过大小上限又有长行时只写「不高亮」；认不出语言的长行不加说明', async t => {
+  const { page } = await open(t, 'both.js', oneLine(HIGHLIGHT_LIMIT + 1));
+  assert.ok(noteOf(page).endsWith(' · 不高亮') && !noteOf(page).includes('行太长'), noteOf(page));
+  const plain = await open(t, 'long.txt', oneLine(LINE_LIMIT + 1));
+  assert.ok(!noteOf(plain.page).includes('不高亮'), noteOf(plain.page));
+  const trunc = await open(t, 'huge.js', oneLine(TEXT_LIMIT), { size: 2 * TEXT_LIMIT });
+  assert.ok(noteOf(trunc.page).endsWith('只显示前 1.0 MiB，不高亮'), noteOf(trunc.page));
 });
