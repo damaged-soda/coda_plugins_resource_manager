@@ -10,8 +10,8 @@ hljs.registerLanguage('dart', dart);
 hljs.registerLanguage('dockerfile', dockerfile);
 hljs.registerLanguage('scala', scala);
 
-// 超过这个字节数不高亮（实测依据见 docs/design/phase-3.md 第 15.4 节）。
-export const HIGHLIGHT_LIMIT = 256 * 1024;
+// 超过这个字节数不高亮（实测依据和为什么是 128 KiB 见 docs/design/phase-3.md 第 15.4 节）。
+export const HIGHLIGHT_LIMIT = 128 * 1024;
 
 const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#x27;': "'" };
 const ENTITY = /&(?:amp|lt|gt|quot|#x27);/y;

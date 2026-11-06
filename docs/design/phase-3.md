@@ -653,7 +653,7 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 - **放进页面**：不用 `innerHTML`。highlight.js 的输出只有 `<span class="…">`、`</span>` 和 5 种转义（`&amp;` `&lt;` `&gt;` `&quot;` `&#x27;`）。`view/highlight.mjs` 严格按这个格式解析，用 `h()` 建出 `span` 和文本节点。类名允许字母、数字、`-`、`_`，空格分隔多个，包括内嵌语言产生的 `language-javascript` 这类；实体只解码一次；标签必须配对、输出必须完整消费。highlight.js 的 safe mode 会吞掉内部错误，返回合法的纯文本转义并带上 `errorRaised`，所以失败有三种：调用抛错、结果带 `errorRaised`、输出不合格式。三种都按「没能高亮」处理：显示纯文本，元信息注明「没能高亮」。输出里没有 `span` 不算失败（空文件、只有普通标识符的文件）。这是外部库的边界，所以要校验；只包住库调用和解析这两步，`show()` 其他地方的错误照常抛出。这样做的好处：文件内容绝不会被当成 HTML；测试用的 DOM 替身不用加 HTML 解析。
 - **调用参数**：`hljs.highlight(text, { language, ignoreIllegals: true })`。`ignoreIllegals` 让语法不完整的文件（截断、写到一半）也能出结果。
 - **不变量**：高亮后 `pre.text.textContent === result.text`（解码后的字符串，不是原始字节）。CRLF、单独的 `\r`、NUL 都原样保留，这也是不用 `innerHTML` 的原因之一：HTML 解析会规范化这些字符。选中文字加到聊天（`clippedSelection`、`linesOf`）靠这一点，它们本来就用 `Range`，嵌套的 `span` 不影响。
-- **上限**：`HIGHLIGHT_LIMIT = 256 KiB`，按读到的字节数 `result.bytes.length` 算，只定义在 `view/highlight.mjs`。依据是 2026-11-06 本机 Chrome 实测（高亮加放进页面加排版，用的是 `innerHTML`，正式实现要重测）：
+- **上限**：`HIGHLIGHT_LIMIT = 128 KiB`（原定 256 KiB，实测后降低，见下），按读到的字节数 `result.bytes.length` 算，只定义在 `view/highlight.mjs`。依据是 2026-11-06 本机 Chrome 实测（高亮加放进页面加排版，用的是 `innerHTML`，正式实现要重测）：
 
 | 大小 | JS | JSON |
 |---|---|---|
@@ -662,7 +662,9 @@ test/harness/      深浅色、Mac 和 iPhone 的截图
 | 512 KiB | 197 ms | 189 ms |
 | 1 MiB | 367 ms | 316 ms |
 
-  iPhone 按慢 2～3 倍估，256 KiB 约 0.2～0.3 秒。token 密度对耗时影响很大（评审在 Node 里量到，256 KiB 的密集 JSON 光高亮就约 133 ms，标记串约 5 MB），所以验收用正式实现重测四种固定样本，每种都是 256 KiB：普通 JS、密集 JSON、多字节文本、一整行的长文件。计时从调用库开始，包括解析、放进页面和强制排版，首次打开和重复打开各报一次。任何一种在 Mac Chrome 上超过 150 ms，就把上限降到 128 KiB 再测一遍，并写进 PR 说明。
+  **实测结果（正式实现，`h()` 建节点，本机无头 Chrome，2026-11-06）**：256 KiB 时 JS 169 ms、密集 JSON 261 ms、多字节 73 ms、一整行 463 ms，超过 150 ms，按本节退路把上限降到 128 KiB：JS 97 ms、密集 JSON 133 ms、多字节 36 ms，都在门槛内；一整行仍是 230 ms（约 8.9 万个 span，整行排版），列为已知的病态样本（harness 只拦 300 ms 以上）。启动多花的时间约 5 ms（热）、10～17 ms（冷），低于第 15.7 节的 30 ms。
+
+  iPhone 按慢 2～3 倍估，256 KiB 约 0.2～0.3 秒。token 密度对耗时影响很大（评审在 Node 里量到，256 KiB 的密集 JSON 光高亮就约 133 ms，标记串约 5 MB），所以验收用正式实现重测四种固定样本，每种都是上限那么大：普通 JS、密集 JSON、多字节文本、一整行的长文件。计时从调用库开始，包括解析、放进页面和强制排版，首次打开和重复打开各报一次。任何一种在 Mac Chrome 上超过 150 ms，就把上限降到 128 KiB 再测一遍，并写进 PR 说明。
 
 - **元信息**：超过上限的，在现有那一行末尾加「不高亮」，例如 `lib · 9,812 行 · 410 KiB · 不高亮`。超过 1 MiB 的已经有「只显示前 1 MiB」，合成「只显示前 1 MiB，不高亮」。认不出语言的不加说明。
 - **刷新**：文件没变不重画（现状）；变了就重新高亮，滚动位置照旧保留。

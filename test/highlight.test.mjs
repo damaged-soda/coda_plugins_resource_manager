@@ -8,7 +8,7 @@ globalThis.document = { createElement: tag => new Element(tag) };
 
 const textOf = nodes => nodes.map(node => (typeof node === 'string' ? node : node.textContent)).join('');
 
-test('上限是 256 KiB', () => assert.equal(HIGHLIGHT_LIMIT, 256 * 1024));
+test('上限是 128 KiB（设计原定 256 KiB，实测后按第 15.4 节的退路降到 128 KiB）', () => assert.equal(HIGHLIGHT_LIMIT, 128 * 1024));
 
 test('解析：嵌套 span、多个类名、内嵌语言的类名、五种转义只解一次', () => {
   const html = 'a <span class="hljs-title function_">f</span>(<span class="language-javascript"><span class="hljs-string">&quot;&#x27;&amp;lt;&lt;&gt;&quot;</span></span>) &amp;amp;';

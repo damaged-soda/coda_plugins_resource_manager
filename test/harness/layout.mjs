@@ -6,6 +6,7 @@ import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HIGHLIGHT_LIMIT } from '../../view/highlight.mjs';
 import { KINDS } from '../../view/icons.mjs';
 
 const chromePath = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -17,6 +18,21 @@ const LONG_DIR = 'long-directory-name-that-goes-on-and-on-and-on-forever', LONG_
 const DEEP_FILE = 'a-file-with-a-name-that-is-long-too-so-the-path-wraps-many-lines.txt'; // docs 下的三层：行菜单的路径折很多行
 const TYPED = ['app.ts', 'main.py', 'main.go', 'lib.rs', 'App.swift', 'main.c', 'Main.java', 'tool.rb', 'index.html', 'theme.css', 'data.json', 'config.yml', 'build.sh', 'notes.md', 'report.pdf',
   'photo.jpg', 'clip.mp4', 'song.mp3', 'archive.zip', 'sheet.csv', 'cache.sqlite', 'face.woff2', 'yarn.lock', 'Cargo.toml', 'query.sql', 'plain.txt', 'blob.bin']; // assets 里各种类型的文件：截图里看类型图标
+const SAMPLE_JS = [ // assets/sample.js：高亮用的样本（不放在 src 里：src 的大小和项数被属性页的检查用着），关键字、字符串、模板里嵌套的表达式、正则、数字、注释、类名、装饰器都有
+  '// 示例：每一行都有不同的 token',
+  "import { readFile } from 'node:fs/promises';",
+  'const PATTERN = /ab+c/gi;',
+  'class Greeter extends Base {',
+  '  greet(name = "world", times = 3) {',
+  '    const message = `hello ${name.toUpperCase()}, ${times + 1}`;',
+  '    if (this.count++ > 10 || name === null) return true;',
+  "    return message.replace(PATTERN, 'x') + 0x1F;",
+  '  }',
+  '}',
+  '@decorator',
+  'export async function main(items) { for (const item of items) console.log(item?.value ?? undefined); }',
+  '',
+].join('\n');
 const HIDDEN_NAME = '.DS_Store'; // 页面默认藏起来的名字之一：「显示隐藏文件」打开后它才出现，这就是选完之后该等到的样子
 const ROOT_ROWS = 4 + 3 + 1 + 2 + FILLER; // 四个目录、三个文件、一个长名字、两个链接、填充；HIDDEN_NAME 默认被页面藏起来，不算
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -60,6 +76,8 @@ const cleanup = async () => {
 let id = 0; const waiting = new Map();
 const send = (method, params = {}) => new Promise((resolve, reject) => { waiting.set(++id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
 const evaluate = async expr => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
+// 页面里的脚本抛错时报出原因，不悄悄返回 undefined（高亮一节用）。
+const evalStrict = async expr => { const { result, exceptionDetails } = (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result; if (exceptionDetails) throw new Error(`页面脚本出错：${exceptionDetails.exception?.description ?? exceptionDetails.text}`); return result.value; };
 // 等条件成立：按真实时间算截止，不按次数。机器忙的时候目录请求和重绘会慢，固定几秒的等待会假失败；等不到就报出在等什么。
 const UNTIL_MS = 30000;
 const until = async (expr, what) => {
@@ -87,7 +105,7 @@ async function start() {
   for (const dir of ['src', 'docs', 'assets', 'locked', join('docs', LONG_DIR, LONG_SUB)]) await mkdir(join(fixture, dir), { recursive: true });
   const touch = (path, text = 'x\n') => writeFile(join(fixture, path), text);
   await Promise.all([
-    touch('src/app.js'), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'), touch(join('docs', LONG_DIR, LONG_SUB, DEEP_FILE)),
+    touch('src/app.js'), touch('assets/sample.js', SAMPLE_JS), touch('src/util.mjs'), touch('src/style.css'), touch('docs/README.md'), touch('docs/guide.txt'), touch('assets/logo.png'), touch(join('docs', LONG_DIR, LONG_SUB, DEEP_FILE)),
     ...TYPED.map(name => touch(join('assets', name))),
     touch('LICENSE'), touch('package.json', '{}\n'), touch('notes.txt', Array.from({ length: LONG_LINES }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
     touch(LONG_NAME), touch(HIDDEN_NAME), ...Array.from({ length: FILLER }, (_, i) => touch(`zz-${String(i).padStart(3, '0')}.txt`)),
@@ -124,7 +142,7 @@ const trackRequests = `(() => { if (window.__rpc) return; const rpc = window.__r
   coda.postMessage = message => { if (message?.requestId) { rpc.sent++; rpc.open.add(message.requestId); } if (message?.type === 'add_text') rpc.adds.push({ text: message.text, block: message.block }); return post(message); };
   coda.copy = text => { rpc.copies.push(text); };
   addEventListener('message', event => { if (event.data?.requestId) rpc.open.delete(event.data.requestId); if (event.data?.harness === 'toolbar' && event.data.items) rpc.toolbars.push(event.data.items); }, true); })()`;
-const SIZES = { mac: [280, 700, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], tiny: [150, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
+const SIZES = { mac: [280, 700, '0,0,0,0'], window: [760, 560, '0,0,0,0'], narrow: [200, 700, '0,0,0,0'], tiny: [150, 700, '0,0,0,0'], portrait: [420, 790, '0,0,34,0'], landscape: [844, 390, '0,59,21,59'], short: [420, 220, '0,0,21,0'] };
 // state：载入前写进页面的保存状态（假装上次退出时的样子，例如选中的文件）。
 // extra：附在页面地址后的参数，如 '&back=0'（模拟没有 coda.back 的旧客户端）。
 // ready：载入后要等到出现的元素，列表是 .row.entry，图标视图是 .gi。
@@ -146,11 +164,11 @@ async function open(size, platform, theme, { keep = false, state = null, extra =
   await evaluate(trackRequests);
 }
 // 文件页：query 是额外的参数；等正文或说明区出现。
-async function openFile(size, theme, query = 'session=A&path=notes.txt') {
+async function openFile(size, theme, query = 'session=A&path=notes.txt', platform = 'ios') {
   const safe = SIZES[size][2];
-  await setViewport(size, 'ios');
+  await setViewport(size, platform);
   const stamp = Date.now();
-  await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=ios&theme=${theme}&safe=${safe}&${query}&t=${stamp}` });
+  await send('Page.navigate', { url: `${serverUrl}view/file.html?platform=${platform}&theme=${theme}&safe=${safe}&${query}&t=${stamp}` });
   await until(`new URLSearchParams(location.search).get('t') === '${stamp}'`, '新页载入'); // 同 open：不能让上一页的正文骗过下面的等待
   await until(`document.querySelector('.text') || document.querySelector('#notice:not(.off) p')`, '文件页出现');
 }
@@ -199,9 +217,55 @@ const covered = `(() => { const pane = document.getElementById('tree'), r = pane
   for (let y = from + 4; y < r.bottom - 4; y += 8) { const e = document.elementFromPoint(r.left + r.width / 2, y); if (!e?.closest('.row')) miss.push(Math.round(y)); }
   return miss; })()`;
 
+// ---- 0.7.0 语法高亮的检查用到的页面脚本 ----
+// 侧栏启动多花的时间：在同源的一个空文档里计时导入 view/highlight.mjs（含打包的库和三个额外语言的登记）。无头 Chrome 的第一个页面是冷的，之后再开的页面是热的（服务端 no-store，热只是进程里的编译缓存）。
+async function measureStartup() {
+  const once = async tag => {
+    await send('Page.navigate', { url: `${serverUrl}view/style.css?${tag}` });
+    await until(`location.search === '?${tag}' && document.readyState !== 'loading'`, '空文档载入');
+    return evaluate(`(async () => { const t0 = performance.now(); const m = await import('/view/highlight.mjs?${tag}'); const t1 = performance.now();
+      return { ms: t1 - t0, languages: m.hljs.listLanguages().length }; })()`);
+  };
+  const cold = await once('cold');
+  const hot = [];
+  for (const tag of ['hot1', 'hot2', 'hot3']) hot.push(await once(tag));
+  return { cold: cold.ms, hot: hot.map(x => x.ms), languages: cold.languages };
+}
+// 每个有颜色规则的类，加上嵌套组合；颜色读的是 getComputedStyle 的最终值，底色是从 .text 往上逐层合成透明色的结果，不先四舍五入。
+const HL_RULES = { keyword: 'keyword', string: 'string', comment: 'comment', number: 'number', literal: 'number', title: 'title', type: 'type', built_in: 'type', attr: 'attr', property: 'attr', attribute: 'attr',
+  meta: 'meta', tag: 'tag', name: 'tag', 'selector-tag': 'tag', 'selector-class': 'tag', 'selector-id': 'tag', 'selector-pseudo': 'tag', 'selector-attr': 'tag', variable: 'variable', regexp: 'regexp',
+  addition: 'addition', deletion: 'deletion', section: 'section' };
+const HL_NESTED = [ // [外层类, 内层类, 内层该用哪组颜色（null：不上色，继承外层）, 外层的组]
+  ['hljs-string', 'hljs-subst', null, 'string'], ['language-javascript', 'hljs-string', 'string', null], ['language-javascript', 'hljs-keyword', 'keyword', null], ['hljs-tag', 'hljs-name', 'tag', 'tag'],
+  ['hljs-tag', 'hljs-attr', 'attr', 'tag'], ['hljs-meta', 'hljs-keyword', 'keyword', 'meta'], ['hljs-meta hljs-string', 'hljs-subst', null, 'meta'], ['hljs-comment', 'hljs-doctag', null, 'comment'],
+  ['hljs-title class_', 'hljs-title function_', 'title', 'title'], ['hljs-string', 'hljs-comment', 'comment', 'string']];
+const HL_PLAIN = ['hljs-punctuation', 'hljs-params', 'hljs-operator', 'hljs-subst', 'hljs-function', 'hljs-bullet', 'hljs-emphasis', 'hljs-strong'];
+const contrastScript = `(() => {
+  const rgba = css => { const v = css.match(/[\\d.]+/g).map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; };
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  const text = document.querySelector('.text');
+  let bg = [255, 255, 255];
+  const chain = []; for (let el = text; el; el = el.parentElement) chain.push(rgba(getComputedStyle(el).backgroundColor));
+  for (const [r, g, b, a] of chain.reverse()) bg = [r * a + bg[0] * (1 - a), g * a + bg[1] * (1 - a), b * a + bg[2] * (1 - a)];
+  const probe = document.createElement('span'); text.append(probe);
+  const wanted = group => { probe.className = ''; probe.style.color = 'var(--hl-' + group + ')'; return getComputedStyle(probe).color; };
+  const fg = getComputedStyle(text).color;
+  const read = (outer, inner) => { const a = document.createElement('span'); a.className = outer; text.append(a); let b = a; if (inner) { b = document.createElement('span'); b.className = inner; a.append(b); }
+    const color = getComputedStyle(b).color; a.remove(); return color; };
+  const rows = [];
+  for (const [cls, group] of Object.entries(${JSON.stringify(HL_RULES)})) rows.push({ name: 'hljs-' + cls, color: read('hljs-' + cls), want: wanted(group) });
+  for (const [outer, inner, group, outerGroup] of ${JSON.stringify(HL_NESTED)}) rows.push({ name: outer + ' > ' + inner, color: read(outer, inner), want: group ? wanted(group) : outerGroup ? wanted(outerGroup) : fg });
+  for (const cls of ${JSON.stringify(HL_PLAIN)}) rows.push({ name: cls + '（不上色）', color: read(cls), want: fg });
+  probe.remove();
+  return { bg: bg.map(Math.round).join(','), fg, rows: rows.map(r => ({ ...r, wired: r.color === r.want, ratio: ratio(rgba(r.color), bg) })) };
+})()`;
+
 let exitCode = 1;
 try {
   await start();
+  const startup = await measureStartup();
   // ---- 断言 ----
   // 有标题（Mac）时：滚到第二页深处，状态存下来，重新载入后恢复到同一个位置，视口里没有空白。
   await open('mac', 'mac', 'light');
@@ -1134,6 +1198,133 @@ try {
   check(`图标视图：${BULK} 条时画出的节点数有上限（可见的一段加上下各 2 行）`, maxNodes > 0 && maxNodes <= 3 * 40, String(maxNodes));
   console.log(`数字（本机无头 Chrome，不是 WKWebView）：${BULK} 条目录，Mac 侧栏 ${total.cols} 列，滚动时最多 ${maxNodes} 个节点，进入目录到第一屏出现 ${Math.round(entered)} 毫秒`);
   await fetch(`${serverUrl}ctl?action=session:A`);
+  // ---- 0.7.0：语法高亮 ----
+  // 启动：导入 view/highlight.mjs（库加三个额外语言）多花的时间。
+  const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+  console.log(`数字（本机无头 Chrome）：侧栏启动多花的时间：冷 ${startup.cold.toFixed(1)} 毫秒；热（同进程再开页面）${startup.hot.map(x => x.toFixed(1)).join('、')} 毫秒，中位数 ${median(startup.hot).toFixed(1)} 毫秒；登记了 ${startup.languages} 种语言`);
+  check('高亮：库里有 39 种语言（内置 36 加 dockerfile、dart、scala）', startup.languages === 39, String(startup.languages));
+  check('高亮：侧栏启动多花的时间，热启动不超过 30 毫秒（超过要改成打开文件时才导入）', median(startup.hot) <= 30, `热 ${startup.hot.join('、')}`);
+
+  // 深浅两种外观 × 三个入口：Mac 侧栏预览、Mac 窗口、iPhone 文件页。每个入口都截图，并检查真实 token 的颜色。
+  const openSidebarSample = async theme => {
+    await open('mac', 'mac', theme);
+    await evalStrict(`[...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('assets')).click()`);
+    await until(`[...document.querySelectorAll('.row.file')].some(r => r.textContent.includes('sample.js'))`, 'assets 展开');
+    await evalStrict(`[...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('sample.js')).click()`);
+    await until(`document.querySelector('.text .hljs-keyword')`, '侧栏预览出现上色的代码');
+  };
+  const entries = [
+    ['Mac 侧栏', theme => openSidebarSample(theme), 'sidebar'],
+    ['Mac 窗口', theme => openFile('window', theme, 'session=A&path=assets/sample.js', 'mac'), 'window'],
+    ['iPhone 文件页', theme => openFile('portrait', theme, 'session=A&path=assets/sample.js'), 'ios'],
+  ];
+  for (const [label, enter, shot] of entries) for (const theme of ['light', 'dark']) {
+    await enter(theme);
+    await until(`document.querySelector('.text .hljs-keyword')`, `${label} ${theme}：出现上色的代码`);
+    const real = await evalStrict(`(() => { const text = document.querySelector('.text'), pick = cls => { const el = text.querySelector(cls); return el && getComputedStyle(el).color; };
+      const probe = document.createElement('span'); text.append(probe); probe.style.color = 'var(--hl-keyword)'; const kw = getComputedStyle(probe).color; probe.style.color = 'var(--hl-string)'; const st = getComputedStyle(probe).color; probe.remove();
+      return { keyword: pick('.hljs-keyword'), wantKeyword: kw, string: pick('.hljs-string'), wantString: st, fg: getComputedStyle(text).color, text: text.textContent,
+        only: [...text.querySelectorAll('*')].every(x => x.tagName === 'SPAN'), nodes: text.querySelectorAll('span').length, meta: document.querySelector('.pmeta').textContent,
+        style: [...text.querySelectorAll('span')].slice(0, 200).every(x => { const c = getComputedStyle(x); return c.fontWeight === '400' && c.fontStyle === 'normal' && c.backgroundColor === 'rgba(0, 0, 0, 0)'; }) }; })()`);
+    check(`${label} ${theme}：真实的代码上了色（关键字、字符串用 --hl-*，不同于正文色），只有 span，文字等于原文，只设了颜色（字重、斜体、背景没动）`,
+      real.keyword === real.wantKeyword && real.string === real.wantString && real.keyword !== real.fg && real.only && real.text === SAMPLE_JS && real.style && real.nodes > 20, JSON.stringify(real).slice(0, 400));
+    const c = await evalStrict(contrastScript);
+    const low = c.rows.filter(r => r.ratio < 4.5 || !r.wired);
+    check(`${label} ${theme}：${c.rows.length} 种 token（含嵌套组合、不上色的类）的最终颜色都接上了 --hl-*，在代码区底色 rgb(${c.bg}) 上不低于 4.5:1`, low.length === 0, JSON.stringify(low));
+    const coloredRows = c.rows.filter(r => r.color !== c.fg);
+    const worst = [...coloredRows].sort((a, b) => a.ratio - b.ratio).slice(0, 3);
+    console.log(`对比度（${label} ${theme}，底色 rgb(${c.bg})）最低三项：${worst.map(r => `${r.name} ${r.ratio.toFixed(2)}`).join('；')}；正文色 ${c.fg}`);
+    // 行对齐：同一份文字，上色的和纯文本的每一行起点的竖直位置、总高度、总宽度都一样；行号列和正文一样高。
+    const align = await evalStrict(`(() => { const code = document.querySelector('.code'), text = code.querySelector('.text'), gutter = code.querySelector('.gutter');
+      const copy = code.cloneNode(false), g2 = gutter.cloneNode(true), t2 = document.createElement('pre'); t2.className = text.className; t2.textContent = text.textContent; copy.append(g2, t2); code.after(copy);
+      const starts = []; const full = text.textContent; for (let i = 0; i < full.length; i++) if (i === 0 || full[i - 1] === '\\n') if (full[i] !== '\\n' && full[i] !== undefined) starts.push(i);
+      const locate = (root, offset) => { const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let seen = 0; for (let n = walker.nextNode(); n; n = walker.nextNode()) { if (offset < seen + n.data.length) return [n, offset - seen]; seen += n.data.length; } return null; };
+      const top = (root, offset) => { const [n, o] = locate(root, offset), r = document.createRange(); r.setStart(n, o); r.setEnd(n, o + 1); return Math.round(r.getBoundingClientRect().top * 100) / 100 - root.getBoundingClientRect().top; };
+      const a = starts.map(i => top(text, i)), b = starts.map(i => top(t2, i));
+      const out = { lines: starts.length, same: a.every((v, i) => Math.abs(v - b[i]) < 0.1), heights: [text.getBoundingClientRect().height, t2.getBoundingClientRect().height], widths: [text.getBoundingClientRect().width, t2.getBoundingClientRect().width],
+        gutter: [gutter.getBoundingClientRect().height, text.getBoundingClientRect().height], step: Math.max(...a.slice(1).map((v, i) => v - a[i])) - Math.min(...a.slice(1).map((v, i) => v - a[i])) };
+      copy.remove(); return out; })()`);
+    check(`${label} ${theme}：行对齐：上色前后 ${align.lines} 行的起点位置（误差 0.1 点内）、正文高度不变，宽度差在 0.5 点内，行号列和正文一样高，行高一致`,
+      align.lines >= 10 && align.same && align.heights[0] === align.heights[1] && Math.abs(align.widths[0] - align.widths[1]) < 0.5 && align.gutter[0] === align.gutter[1] && align.step < 0.1, JSON.stringify(align));
+    await shoot(`hl-${shot}-${theme}`);
+  }
+
+  // 打开耗时：四种固定样本，每种恰好是上限（HIGHLIGHT_LIMIT）字节。每种开一个新页面，首次是页面里第一次，重复是紧接着再来一次。
+  // 计时从调用库开始：高亮、解析成节点、放进页面、强制排版（getBoundingClientRect），和 show() 里的步骤相同。
+  const timing = name => `(async () => {
+    const enc = new TextEncoder(), LIMIT = ${HIGHLIGHT_LIMIT};
+    const fit = (unit, pad = ' ') => { const n = Math.floor(LIMIT / enc.encode(unit).length); let s = unit.repeat(n); s += pad.repeat(LIMIT - enc.encode(s).length); return s; };
+    const samples = {
+      'JS': [fit('function add(a, b) { const s = "str" + a; // note\\n  return /re+/.test(s) ? b * 2 : \`t\${a}\`; }\\nclass K extends Q { static x = 1; get v() { return this.x ?? null; } }\\n'), 'javascript'],
+      'JSON（密集）': [fit('{"id":12345,"name":"abc","tags":["a","b","c"],"ok":true,"n":null,"v":1.5e3},\\n'), 'json'],
+      '多字节': [fit('// 你好，世界 😀 这是一段中文注释\\nconst 名字 = "你好世界 🌍"; function 问候(用户) { return \`你好 \${用户}\`; }\\n'), 'javascript'],
+      '一整行': ['[' + fit('{"k":"v","n":[1,2,3],"t":true},').slice(1), 'json'],
+    };
+    const [text, language] = samples[${JSON.stringify(name)}];
+    const { highlight, appendAll } = await import('/view/highlight.mjs');
+    const { h } = await import('/view/dom.mjs');
+    const body = document.querySelector('.pbody');
+    const render = () => { const t0 = performance.now(); const nodes = highlight(text, language), t1 = performance.now();
+      const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' }, Array.from({ length: text.split('\\n').length }, (_, i) => i + 1).join('\\n'));
+      const pre = h('pre', { class: 'text selectable' }); appendAll(pre, nodes); body.replaceChildren(h('div', { class: 'code' }, gutter, pre)); pre.getBoundingClientRect();
+      const t2 = performance.now(); return { total: t2 - t0, library: t1 - t0, same: nodes !== null && pre.textContent === text }; };
+    const first = render(), again = render();
+    return { bytes: enc.encode(text).length, first, again, spans: body.querySelectorAll('span').length };
+  })()`;
+  const times = {};
+  for (const name of ['JS', 'JSON（密集）', '多字节', '一整行']) {
+    await openFile('window', 'light', 'session=A&path=assets/sample.js', 'mac');
+    await until(`document.querySelector('.text .hljs-keyword')`, '计时页出现');
+    times[name] = await evalStrict(timing(name));
+    const t = times[name];
+    console.log(`数字（本机无头 Chrome）：${name} ${t.bytes} 字节，${t.spans} 个 span：首次 ${t.first.total.toFixed(0)} 毫秒（其中调库 ${t.first.library.toFixed(0)}），重复 ${t.again.total.toFixed(0)} 毫秒（其中调库 ${t.again.library.toFixed(0)}）`);
+  }
+  check('高亮：四种样本都恰好是上限那么多字节，上色后文字等于原文', Object.values(times).every(t => t.bytes === HIGHLIGHT_LIMIT && t.first.same && t.again.same), JSON.stringify(times));
+  const firsts = Object.fromEntries(Object.entries(times).map(([k, t]) => [k, Math.round(t.first.total)]));
+  check(`高亮：三种常见样本（JS、密集 JSON、多字节）${HIGHLIGHT_LIMIT / 1024} KiB 的首次打开都不超过 150 毫秒`, ['JS', 'JSON（密集）', '多字节'].every(name => times[name].first.total <= 150), JSON.stringify(firsts));
+  // 一整行的 JSON 是病态样本（上限那么多字节压成一行，几万个内联 span 要整行排版），实测在 128 KiB 时仍超过 150 毫秒；这里只拦住更坏的退化，数字报告给主会话定。
+  check(`高亮：一整行的 ${HIGHLIGHT_LIMIT / 1024} KiB 病态样本首次打开不超过 300 毫秒（已知超过 150 毫秒，见交付说明）`, times['一整行'].first.total <= 300, JSON.stringify(firsts));
+
+  // 真实选区（Mac 侧栏，上色的文件）：真实的 Range 起点和终点落在不同 token、嵌套 span 里、跨行、从行号列拖进来、结尾在下一行行首。
+  await openSidebarSample('light');
+  await evalStrict(trackRequests);
+  const nth = (needle, extra = 0) => SAMPLE_JS.indexOf(needle) + extra;
+  const lineOf = offset => 1 + (SAMPLE_JS.slice(0, offset).match(/\n/g) ?? []).length;
+  const positionOf = (from, to) => { const last = to > from && SAMPLE_JS[to - 1] === '\n' ? to - 1 : to, a = lineOf(from), b = lineOf(Math.max(from, last)); return a === b ? `assets/sample.js:${a}` : `assets/sample.js:${a}-${b}`; };
+  const realSelect = (from, to) => evaluate(`(() => { const el = document.querySelector('.text'), gutter = document.querySelector('.gutter').firstChild;
+    const locate = offset => { const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let seen = 0, last = null; for (let n = walker.nextNode(); n; n = walker.nextNode()) { last = n; if (offset < seen + n.data.length) return [n, offset - seen]; seen += n.data.length; } return [last, last.data.length]; };
+    const start = ${from} < 0 ? [gutter, 0] : locate(${from}), end = locate(${to}); getSelection().setBaseAndExtent(start[0], start[1], end[0], end[1]);
+    return { picked: getSelection().toString().length, crossing: end[0] !== start[0] }; })()`);
+  const addFromMenu = async label => {
+    const before = (await evalStrict(`window.__rpc.adds.length`));
+    await evalStrict(`document.querySelector('.text').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 60 }))`);
+    if (!(await evalStrict(`!document.getElementById('menu').hidden`))) return null;
+    await evalStrict(`[...document.querySelectorAll('#menu button')].find(x => x.textContent === ${JSON.stringify(label)}).click()`);
+    await until(`window.__rpc.adds.length === ${before + 1}`, `${label} 发出`);
+    return (await evalStrict(`window.__rpc.adds`)).at(-1);
+  };
+  const lineStart = SAMPLE_JS.indexOf('class Greeter'), nextLine = SAMPLE_JS.indexOf('\n', lineStart) + 1;
+  const scenarios = [
+    ['起点在关键字、终点在类名里（不同 token）', lineStart + 2, nth('Greeter', 4)],
+    ['落在模板字符串嵌套的 ${} 里面', nth('name.toUpperCase', 2), nth('name.toUpperCase', 9)],
+    ['起点在模板字符串文字、终点在嵌套的表达式里', nth('hello', 2), nth('toUpperCase', 4)],
+    ['跨行（从方法名到下一个 return）', nth('greet(', 1), nth('return message', 6)],
+    ['从行号列拖进来', -3, nth('class Greeter', 5)],
+    ['结尾在下一行行首（整行，带换行）', lineStart, nextLine],
+  ];
+  for (const [what, from, to] of scenarios) {
+    const clipped = Math.max(from, 0), content = SAMPLE_JS.slice(clipped, to);
+    const info = await realSelect(from, to);
+    const mine = await addFromMenu('添加到聊天（内容）');
+    await realSelect(from, to);
+    const where = await addFromMenu('添加到聊天（位置）');
+    check(`上色后的真实选区：${what}：内容和行号都对`, info.picked > 0 && mine?.text === content && mine?.block === true && where?.text === positionOf(clipped, to) && where?.block === false,
+      JSON.stringify({ info, mine: mine?.text, where: where?.text, want: [content, positionOf(clipped, to)] }));
+  }
+  // 原来的纯文本 notes.txt 用例在上面保留（0.5.0 一节），这里再确认：认不出的文件仍是一个文本节点。
+  await openFile('window', 'light', 'session=A&path=notes.txt', 'mac');
+  check('认不出的文件（notes.txt）仍是 pre 里一个文本节点，没有 span，说明区不加说明', await evalStrict(`(() => { const t = document.querySelector('.text'); return t.childNodes.length === 1 && t.firstChild.nodeType === 3 && !document.querySelector('.pmeta').textContent.includes('高亮'); })()`));
+
   exitCode = failures.length ? 1 : 0;
   keepShots = true;
   console.log(`截图：${shots}`);
