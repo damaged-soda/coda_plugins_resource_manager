@@ -1560,6 +1560,36 @@ try {
   const landed = await gridPos();
   check('图标视图 ↓：目标行不满、没有这一列时，选那一行的最后一个', rightmost.col === cols - 1 && rightmost.name !== last.name && landed.name === last.name && landed.inView, JSON.stringify({ last, rightmost, landed, cols }));
   await shoot('mac-grid-selected-light');
+  // ---- 图标视图：真实双击（设计第 15.10 节）：进入文件夹、打开文件都恰好一次 ----
+  const cellAt = async (name, part) => { // 网格是虚拟化的：先回顶部（src、notes.txt、LICENSE 都在前几行），再把目标滚到中间
+    await evaluate(`${bodyOf}.scrollTop = 0`); await frames();
+    await evaluate(`(${cellBy(name)})?.scrollIntoView({ block: 'center' })`); await frames(); return centerOf(cellBy(name), part); };
+  const gridWhere = () => evaluate(`(() => { const w = ${where}; return { ...w, head: document.querySelector('#grid .gname-head')?.textContent }; })()`);
+  const backGrid = async () => { await realClick(await centerOf(`document.querySelector('#grid .ghead button[aria-label="返回"]')`)); await until(`${headName} === 'demo-project'`, '返回上一层'); await settled('返回上一层'); await frames(); };
+  const backPreview = async () => { await realClick(await centerOf(`document.querySelector('.phead button[aria-label="返回"]')`)); await until(`document.getElementById('preview').classList.contains('off')`, '预览返回图标视图'); await frames(); };
+  for (const part of ['.gname', '.gico']) {
+    const listed = await reqCount('list', 'src');
+    await realClick(await cellAt('src', part), 2);
+    await until(`${headName} === 'src'`, `双击 src（${part}）进入`);
+    await settled('进入 src');
+    const inSrc = await gridWhere();
+    check(`图标视图真实双击文件夹（点 ${part}）：进入 src 恰好一次，选中清空`, await reqCount('list', 'src') === listed + 1 && inSrc.head === 'src' && inSrc.sel.length === 0, JSON.stringify({ listed, inSrc }));
+    await backGrid();
+    const back = await gridWhere();
+    check(`图标视图（点 ${part} 进入后）头部返回：回到上一层，选中的是 src`, back.sel.join() === 'src' && back.head === 'demo-project', JSON.stringify(back));
+  }
+  for (const [name, part, what] of [['notes.txt', '.gico', '图标'], ['LICENSE', '.gname', '名字']]) {
+    if (name === 'notes.txt') { await realClick(await cellAt('package.json', '.gname')); await frames(); }
+    const baseNote = await reqCount('read', name, 0), basePkg = await reqCount('read', 'package.json');
+    await realClick(await cellAt(name, part), 2);
+    await until(`document.querySelector('.text')`, `双击 ${name} 出预览`);
+    await settled(`打开 ${name}`);
+    const pw = await gridWhere();
+    check(`图标视图真实双击文件（${name}，点${what}）：侧栏出预览，只读一次${name === 'notes.txt' ? '，另一个文件没被读' : ''}，焦点交给预览面板`, await reqCount('read', name, 0) === baseNote + 1 && await reqCount('read', 'package.json') === basePkg && pw.preview && pw.active === 'preview', JSON.stringify({ baseNote, basePkg, pw }));
+    await backPreview();
+    const pb = await gridWhere();
+    check(`图标视图（打开 ${name} 后）预览返回：回到图标视图，选中的仍是 ${name}`, pb.sel.join() === name && !pb.preview, JSON.stringify(pb));
+  }
   await switchView('list');
   await until(treeShown, '回到列表');
 
