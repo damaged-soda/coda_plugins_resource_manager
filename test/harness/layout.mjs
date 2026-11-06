@@ -365,36 +365,12 @@ try {
     check(`iPhone ${size}：卡片末行完整可见`, end.lastText.includes('zz-119') && end.lastH === 58 && end.inCard && end.cardFits && end.inPane, JSON.stringify(end));
   }
 
-  // iPhone 文件页的底部工具条：完整在视口里，操作区至少 44 点，安全区另加；代码区最后一行能滚到工具条上方。
-  const SAFE_BOTTOM = { portrait: 34, landscape: 21 };
+  // iPhone 不再进「文件」视图（设计第 16 节），但别的入口仍可能在 iPhone 上打开它：没有底部工具条，正文照常显示（资源页里的 iPhone 预览见文件末尾的一节）。
   for (const size of ['portrait', 'landscape']) {
     await openFile(size, 'light');
-    check('file.html：关掉了文字自动放大', (await evaluate(adjust)) === '100%');
-    const land = size === 'landscape';
-    const bar = await evaluate(`(() => { const b = document.getElementById('bar'), r = b.getBoundingClientRect();
-      const buttons = [...b.querySelectorAll('button')].filter(x => x.getClientRects().length > 0);
-      return { bottom: r.bottom, height: r.height, top: r.top, inner: innerHeight, names: buttons.map(x => x.textContent), heights: buttons.map(x => x.getBoundingClientRect().height),
-        widths: buttons.map(x => x.getBoundingClientRect().width), inside: buttons.every(x => { const q = x.getBoundingClientRect(); return q.left >= 0 && q.right <= innerWidth && q.top >= r.top && q.bottom <= r.bottom; }),
-        previewPad: getComputedStyle(document.getElementById('preview')).paddingBottom, order: b.previousElementSibling.id }; })()`);
-    check(`iPhone ${size}：文件页底部工具条贴着视口底边，高度 = 操作区 44 点 + 安全区 + 1 点分隔线`, bar.bottom === bar.inner && bar.height === 44 + SAFE_BOTTOM[size] + 1 && bar.order === 'stage', JSON.stringify(bar));
-    check(`iPhone ${size}：${land ? '返回、刷新、复制路径' : '刷新、复制路径（返回只在横屏）'}都可见，各至少 44 点，完整在工具条里`,
-      JSON.stringify(bar.names) === JSON.stringify(land ? ['返回', '刷新', '复制路径'] : ['刷新', '复制路径']) && bar.heights.every(x => x >= 44) && bar.widths.every(x => x >= 44) && bar.inside, JSON.stringify(bar));
-    check(`iPhone ${size}：预览面板不重复留安全区`, bar.previewPad === '0px', bar.previewPad);
-    const end = await evaluate(`(async () => { const body = document.querySelector('.pbody'); body.scrollTop = body.scrollHeight; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const text = document.querySelector('.text').getBoundingClientRect(), pane = body.getBoundingClientRect(), bar = document.getElementById('bar').getBoundingClientRect();
-      return { textBottom: text.bottom, paneBottom: pane.bottom, barTop: bar.top, lines: document.querySelector('.text').textContent.trim().split('\\n').length }; })()`);
-    check(`iPhone ${size}：代码区滚到底，最后一行在工具条上方`, end.lines === LONG_LINES && end.textBottom <= end.barTop + 0.5 && end.paneBottom <= end.barTop + 0.5, JSON.stringify(end));
-    check(`iPhone ${size}：头部元信息是 行数 · 大小，没有复制按钮`, (await evaluate(`document.querySelector('.pmeta').textContent`)).startsWith(`${LONG_LINES} 行 · `)
-      && (await evaluate(`document.querySelectorAll('.phead button[aria-label="复制路径"]').length`)) === 0);
-
-    // 说明区状态（没有可浏览的目录）：工具条不被盖住、不在 inert 里，复制的是启动值里的路径。
-    await openFile(size, 'light', 'session=ZZ&path=notes.txt');
-    const usable = await evaluate(`(() => { window.__copied = null; coda.copy = text => { window.__copied = text; };
-      const buttons = [...document.querySelectorAll('#bar button')].filter(x => x.getClientRects().length > 0);
-      const reach = buttons.map(x => { const r = x.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return hit?.closest('button') === x && !x.closest('[inert]'); });
-      buttons.find(x => x.textContent === '复制路径').click();
-      return { reach, copied: window.__copied, notice: document.getElementById('notice').textContent, noticeShown: !document.getElementById('notice').classList.contains('off') }; })()`);
-    check(`iPhone ${size}：说明区下工具条的按钮都点得到，复制路径可用`, usable.reach.length === (land ? 3 : 2) && usable.reach.every(Boolean) && usable.copied === 'notes.txt' && usable.noticeShown, JSON.stringify(usable));
+    check(`file.html（iPhone ${size} 参数）：关掉了文字自动放大，正文显示，没有工具条`, (await evaluate(adjust)) === '100%'
+      && (await evaluate(`document.querySelector('.text')?.textContent.trim().split('\\n').length`)) === LONG_LINES
+      && (await evaluate(`document.getElementById('bar').hidden && document.getElementById('bar').children.length === 0`)));
   }
 
   // ⋯ 菜单：第一层是 刷新、显示隐藏文件、「显示」›；视图和排序在「显示」里。两端共用一份内容，宽度随内容，完整在页面内。
@@ -1227,10 +1203,20 @@ try {
     await evalStrict(`window.__open([...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('sample.js')))`);
     await until(`document.querySelector('.text .hljs-keyword')`, '侧栏预览出现上色的代码');
   };
+  const openPhoneSample = async theme => { // 资源页里的 iPhone 预览：轻点（一次 click）
+    await open('portrait', 'ios', theme);
+    await evalStrict(`window.__open([...document.querySelectorAll('.row.dir')].find(r => r.textContent.includes('assets')))`);
+    await until(`[...document.querySelectorAll('.row.file')].length > 3`, 'assets 展开');
+    // 列表是虚拟化的，sample.js 在 assets 靠后：滚到那一段再点。
+    await evalStrict(`(() => { const t = document.getElementById('tree'); t.scrollTop = 58 * 22; t.dispatchEvent(new Event('scroll')); })()`);
+    await until(`[...document.querySelectorAll('.row.file')].some(r => r.textContent.includes('sample.js'))`, 'sample.js 滚进视口');
+    await evalStrict(`window.__open([...document.querySelectorAll('.row.file')].find(r => r.textContent.includes('sample.js')))`);
+    await until(`document.querySelector('.text .hljs-keyword')`, '资源页的 iPhone 预览出现上色的代码');
+  };
   const entries = [
     ['Mac 侧栏', theme => openSidebarSample(theme), 'sidebar'],
     ['Mac 窗口', theme => openFile('window', theme, 'session=A&path=assets/sample.js', 'mac'), 'window'],
-    ['iPhone 文件页', theme => openFile('portrait', theme, 'session=A&path=assets/sample.js'), 'ios'],
+    ['iPhone 资源页', theme => openPhoneSample(theme), 'ios'],
   ];
   for (const [label, enter, shot] of entries) for (const theme of ['light', 'dark']) {
     await enter(theme);
@@ -1260,6 +1246,9 @@ try {
       copy.remove(); return out; })()`);
     check(`${label} ${theme}：行对齐：上色前后 ${align.lines} 行的起点位置（误差 0.1 点内）、正文高度不变，宽度差在 0.5 点内，行号列和正文一样高，行高一致`,
       align.lines >= 10 && align.same && align.heights[0] === align.heights[1] && Math.abs(align.widths[0] - align.widths[1]) < 0.5 && align.gutter[0] === align.gutter[1] && align.step < 0.1, JSON.stringify(align));
+    // 上色的正文和行号同一个字号（iOS 的文字自动放大对许多 span 起作用时两列会错开；Chrome 不放大，这里确认规则生效、两列一致）。
+    const sizes = await evalStrict(`(() => { const f = el => getComputedStyle(el).fontSize, text = document.querySelector('.text'); return { text: f(text), gutter: f(document.querySelector('.gutter')), span: f(text.querySelector('.hljs-keyword')), adjust: ${adjust} }; })()`);
+    check(`${label} ${theme}：上色正文、上色的 span 和行号的字号相同，文字自动放大已关`, sizes.text === sizes.gutter && sizes.span === sizes.gutter && sizes.adjust === '100%', JSON.stringify(sizes));
     await shoot(`hl-${shot}-${theme}`);
   }
 
@@ -1601,15 +1590,144 @@ try {
   await switchView('list');
   await until(treeShown, '回到列表');
 
-  // ---- iPhone：轻点、快速两次轻点都只按现有规则打开一次 ----
+  // ---- 0.7.1：iPhone 在资源页里打开文件（设计第 16 节）----
+  const SAFE_BOTTOM = { portrait: 34, landscape: 21 };
+  const noOpens = `window.__opens = []; coda.open = target => { __opens.push(target); }`;
+  const previewOn = `!document.getElementById('preview').classList.contains('off')`;
+  const backEvent = () => evaluate(`postMessage({ harness: 'back' }, '*')`); // 控制页的返回按钮：on('back', { steps: 1 })
+  const lastBack = () => evaluate(`JSON.stringify((window.__backs ?? []).at(-1) ?? null)`);
+  // 视口里完整可见的第一个条目（滚到深处之后用）。
+  const firstVisible = (selector, container) => evaluate(`(() => { const c = ${container}.getBoundingClientRect(); const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(x => { const r = x.getBoundingClientRect(); return r.top >= c.top + 4 && r.bottom <= c.bottom - 4; }); return el?.querySelector('.name, .gname').textContent ?? null; })()`);
+
+  // 竖屏、横屏：打开一个 300 行的文件。预览替代目录树，不调 coda.open，只读一次；顶部工具条、声明的路径、最后一行在安全区之上；返回回到目录树。
+  for (const size of ['portrait', 'landscape']) {
+    const land = size === 'landscape';
+    await open(size, 'ios', 'light');
+    await evaluate(noOpens);
+    await evaluate(`(${rowBy('notes.txt')}).scrollIntoView({ block: 'center' })`);
+    await frames();
+    const reads = await reqCount('read', 'notes.txt', 0);
+    await realClick(await centerOf(rowBy('notes.txt'), '.name'));
+    await until(`${previewOn} && document.querySelector('#preview .text')`, `${size}：预览出现`);
+    await settled(`${size}：读 notes.txt`);
+    check(`iPhone ${size}：轻点文件在页内切到预览，只读一次，没有调 coda.open，页面还是资源页`, await reqCount('read', 'notes.txt', 0) === reads + 1 && (await evaluate(`__opens.length`)) === 0 && (await evaluate(`location.pathname`)) === '/view/index.html');
+    check(`iPhone ${size}：资源页关掉了文字自动放大`, (await evaluate(adjust)) === '100%');
+    check(`iPhone ${size}：预览时声明的路径是 ['资源管理器']`, await lastBack() === JSON.stringify(['资源管理器']), await lastBack());
+    const top = await evaluate(`(() => { const bar = document.getElementById('bar'), buttons = [...bar.querySelectorAll('button')].filter(x => x.getClientRects().length > 0);
+      return { title: bar.querySelector('.bar-title')?.textContent, names: buttons.map(x => x.getAttribute('aria-label') ?? x.textContent), heights: buttons.map(x => x.getBoundingClientRect().height),
+        meta: document.querySelector('.pmeta').textContent, copyInHead: document.querySelectorAll('.phead button[aria-label="复制路径"]').length, backInHead: document.querySelectorAll('.phead button[aria-label="返回"]').length }; })()`);
+    check(`iPhone ${size}：顶部工具条标题是文件名，${land ? '返回、更多' : '更多（返回只在横屏）'}，各至少 44 点；头部没有复制和返回按钮，元信息是 行数 · 大小`,
+      top.title === 'notes.txt' && JSON.stringify(top.names) === JSON.stringify(land ? ['返回', '更多'] : ['更多']) && top.heights.every(x => x >= 44) && top.copyInHead === 0 && top.backInHead === 0 && top.meta.startsWith(`${LONG_LINES} 行 · `), JSON.stringify(top));
+    // ⋯ 菜单：只有刷新和复制路径（相对路径）。
+    await openMore('ios');
+    const labels = await evaluate(`[...document.querySelectorAll('#menu button')].map(x => x.textContent)`);
+    check(`iPhone ${size}：预览时 ⋯ 菜单只有 刷新、复制路径（没有显示隐藏文件和「显示」）`, JSON.stringify(labels) === JSON.stringify(['刷新', '复制路径']), JSON.stringify(labels));
+    await evaluate(`window.__rpc.copies.length = 0`);
+    await clickItem('复制路径');
+    check(`iPhone ${size}：复制路径复制的是相对路径`, JSON.stringify(await evaluate(`window.__rpc.copies`)) === JSON.stringify(['notes.txt']));
+    // 最后一行在安全区之上：正文滚到底，最后一行的底边不低于预览底边减去底部安全区。
+    const end = await evaluate(`(async () => { const body = document.querySelector('#preview .pbody'); body.scrollTop = body.scrollHeight; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const text = document.querySelector('#preview .text').getBoundingClientRect(), pane = body.getBoundingClientRect(), pad = getComputedStyle(body).paddingBottom;
+      return { textBottom: text.bottom, paneBottom: pane.bottom, pad, lines: document.querySelector('#preview .text').textContent.trim().split('\\n').length, previewPad: getComputedStyle(document.getElementById('preview')).paddingBottom }; })()`);
+    check(`iPhone ${size}：滚到底，最后一行在底部安全区（${SAFE_BOTTOM[size]} 点）之上；安全区归正文，预览面板不重复留`,
+      end.lines === LONG_LINES && end.pad === `${SAFE_BOTTOM[size]}px` && end.previewPad === '0px' && end.textBottom <= end.paneBottom - SAFE_BOTTOM[size] + 0.5, JSON.stringify(end));
+    if (land) {
+      await realClick(await centerOf(`document.querySelector('#bar .exit')`));
+      await until(`!${previewOn}`, '横屏的返回关掉预览');
+      check('iPhone 横屏：工具条的「返回」先关预览，没有离开资源页', (await evaluate(`location.pathname`)) === '/view/index.html' && await lastBack() === JSON.stringify([]));
+    } else {
+      await backEvent();
+      await until(`!${previewOn}`, '系统返回关掉预览');
+      check('iPhone 竖屏：系统返回关掉预览，声明的路径回到 []，刚看的文件是选中的', await lastBack() === JSON.stringify([]) && await evaluate(`${rowBy('notes.txt')}.classList.contains('sel')`));
+    }
+  }
+
+  // 回来后目录树原样：会话 B（bulk 目录两万条，分页），列表里展开 bulk、点过「再显示」、滚到深处，打开里面的文件，再返回。
+  await fetch(`${serverUrl}ctl?action=session:B`);
   await open('portrait', 'ios', 'light');
-  await evaluate(`window.__opens = []; coda.open = target => { __opens.push(target); return new Promise(resolve => setTimeout(resolve, 30)); }`);
-  const phone = await centerOf(rowBy('notes.txt'), '.name');
-  await realClick(phone, 1);
-  await realClick(phone, 1);
-  await realClick(phone, 2);
-  await wait(200); // 防连点的等待是页面自己的时间（1 秒），这里只是让三组事件都到
-  check('iPhone：轻点、快速两次轻点、两次 clickCount 只打开一次（防连点照旧）', await evaluate(`window.__opens.length`) === 1, JSON.stringify(await evaluate(`window.__opens`)));
+  await until(`${rowBy('bulk')} !== undefined`, '会话 B 的根目录');
+  await evaluate(noOpens);
+  await realClick(await centerOf(rowBy('bulk'), '.name'));
+  await until(`[...document.querySelectorAll('.row.entry')].some(r => r.querySelector('.name').textContent.startsWith('item-'))`, '展开 bulk');
+  const treeEnd = () => evaluate(`(async () => { const t = document.getElementById('tree'); t.scrollTop = t.scrollHeight; t.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); return t.scrollHeight; })()`);
+  const spacerH = () => evaluate(`parseFloat(document.querySelector('.spacer').style.height)`);
+  const h0 = await spacerH();
+  await treeEnd();
+  await until(`document.querySelector('.row.more') !== null`, '「再显示」出现');
+  await realClick(await centerOf(`document.querySelector('.row.more')`));
+  await until(`parseFloat(document.querySelector('.spacer').style.height) > ${h0}`, '点「再显示」后的第二页');
+  await settled('第二页');
+  await evaluate(`(() => { const t = document.getElementById('tree'); t.scrollTop = 3000; t.dispatchEvent(new Event('scroll')); })()`);
+  await frames();
+  const snapshot = () => evaluate(`(() => { const t = document.getElementById('tree'); return { top: t.scrollTop, spacer: document.querySelector('.spacer').style.height,
+    names: [...document.querySelectorAll('.row.entry')].map(r => r.querySelector('.name').textContent).filter((_, i, all) => i === 0 || i === all.length - 1),
+    expanded: [...document.querySelectorAll('.row.dir[aria-expanded="true"]')].length }; })()`);
+  const listBefore = await snapshot();
+  const pick1 = await firstVisible('.row.entry.file', `document.getElementById('tree')`);
+  const reads1 = await reqCount('read', `bulk/${pick1}`, 0);
+  const tapAt = await centerOf(rowBy(pick1), '.name');
+  await realClick(tapAt); await realClick(tapAt); await realClick(tapAt, 2); // 快速两次轻点，再加一次双击的两组事件
+  await until(previewOn, '列表：预览出现');
+  await settled('列表：读文件');
+  check('iPhone：快速两次轻点和一次双击（共四组 click）只打开一次：只读了一次，没有 coda.open', await reqCount('read', `bulk/${pick1}`, 0) === reads1 + 1 && (await evaluate(`__opens.length`)) === 0, `${pick1} ${await reqCount('read', `bulk/${pick1}`, 0)} 次`);
+  await backEvent();
+  await until(`!${previewOn} && ${treeShown}`, '列表：返回目录树');
+  await frames();
+  const listAfter = await snapshot();
+  check('iPhone 列表：打开子目录里的文件（bulk 已展开、点过「再显示」、滚到 3000 点）再返回：滚动位置、总高度、可见的行、展开状态都和打开前一样',
+    listBefore.top >= 2900 && listAfter.top === listBefore.top && listAfter.spacer === listBefore.spacer && JSON.stringify(listAfter.names) === JSON.stringify(listBefore.names) && listAfter.expanded === listBefore.expanded, JSON.stringify({ listBefore, listAfter }));
+
+  // 图标视图：进入 bulk、翻页、滚到深处，打开文件；一次返回关预览，仍在 bulk 里、位置不变；再来一次，两次返回退到根目录。
+  await openGrid('portrait', 'ios', 'light');
+  await until(`${gridNames}.includes('bulk')`, '图标视图的根目录');
+  await evaluate(noOpens);
+  await realClick(await centerOf(cellBy('bulk')));
+  await until(`${gridNames}.some(n => n.startsWith('item-'))`, '进入 bulk');
+  const gridBody = `document.querySelector('#grid .gbody')`;
+  const gh0 = await evaluate(`parseFloat(document.querySelector('#grid .gspacer').style.height)`);
+  await evaluate(`(async () => { const b = ${gridBody}; b.scrollTop = b.scrollHeight; b.dispatchEvent(new Event('scroll')); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+  await until(`document.querySelector('#grid .gnote.more') !== null`, '图标视图的「再显示」');
+  await realClick(await centerOf(`document.querySelector('#grid .gnote.more')`));
+  await until(`parseFloat(document.querySelector('#grid .gspacer').style.height) > ${gh0}`, '图标视图的第二页');
+  await settled('图标视图第二页');
+  await evaluate(`(() => { const b = ${gridBody}; b.scrollTop = 4000; b.dispatchEvent(new Event('scroll')); })()`);
+  await frames();
+  const gridSnap = () => evaluate(`(() => ({ top: ${gridBody}.scrollTop, spacer: document.querySelector('#grid .gspacer').style.height, head: document.querySelector('#grid .gname-head')?.textContent,
+    first: document.querySelector('#grid .cell')?.textContent, back: JSON.stringify((window.__backs ?? []).at(-1) ?? null) }))()`);
+  const gBefore = await gridSnap();
+  const pick2 = await firstVisible('#grid .gi', gridBody);
+  const gAt = await centerOf(cellBy(pick2));
+  const gReads = await reqCount('read', `bulk/${pick2}`, 0);
+  await realClick(gAt); await realClick(gAt);
+  await until(previewOn, '图标视图：预览出现');
+  await settled('图标视图：读文件');
+  check('iPhone 图标视图：快速两次轻点只读一次；预览时声明的路径是 [根目录名, 当前目录名]', await reqCount('read', `bulk/${pick2}`, 0) === gReads + 1 && (await lastBack()) === JSON.stringify(['bulk-project', 'bulk']), await lastBack());
+  await backEvent();
+  await until(`!${previewOn}`, '图标视图：一次返回关预览');
+  await frames();
+  const gAfter = await gridSnap();
+  check('iPhone 图标视图：一次返回只关预览，仍在 bulk 里，滚动位置、总高度、第一个可见单元格不变，路径回到 [根目录名]',
+    gBefore.top >= 3900 && gAfter.top === gBefore.top && gAfter.spacer === gBefore.spacer && gAfter.head === 'bulk' && gAfter.first === gBefore.first && gAfter.back === JSON.stringify(['bulk-project']), JSON.stringify({ gBefore, gAfter }));
+  await realClick(await centerOf(cellBy(pick2)));
+  await until(previewOn, '图标视图：再次打开');
+  await backEvent();
+  await until(`!${previewOn}`, '图标视图：关预览');
+  await backEvent();
+  await until(`${gridNames}.includes('bulk')`, '图标视图：两次返回到根目录');
+  check('iPhone 图标视图：再开一次文件，两次返回（关预览、退一层）到根目录，路径为空', await lastBack() === JSON.stringify([]));
+  await fetch(`${serverUrl}ctl?action=session:A`);
+
+  // 说明区（会话 ZZ 没有可浏览的目录）：顶部工具条的按钮点得到、不在 inert 里。
+  await fetch(`${serverUrl}ctl?action=session:ZZ`);
+  for (const size of ['portrait', 'landscape']) {
+    const land = size === 'landscape';
+    await open(size, 'ios', 'light', { ready: '#notice:not(.off) p' });
+    const usable = await evaluate(`(() => { const buttons = [...document.querySelectorAll('#bar button')].filter(x => x.getClientRects().length > 0);
+      const reach = buttons.map(x => { const r = x.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return hit?.closest('button') === x && !x.closest('[inert]'); });
+      return { names: buttons.map(x => x.getAttribute('aria-label') ?? x.textContent), reach, notice: document.getElementById('notice').textContent, noticeShown: !document.getElementById('notice').classList.contains('off') }; })()`);
+    check(`iPhone ${size}：说明区下顶部工具条的按钮都点得到（${land ? '返回、更多' : '更多'}），说明区在显示`, usable.noticeShown && usable.notice !== '' && JSON.stringify(usable.names) === JSON.stringify(land ? ['返回', '更多'] : ['更多']) && usable.reach.every(Boolean), JSON.stringify(usable));
+  }
+  await fetch(`${serverUrl}ctl?action=session:A`);
 
   // ---- 截图：Mac 两种外观，有选中行 ----
   for (const theme of ['light', 'dark']) {
