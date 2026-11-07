@@ -58,7 +58,8 @@ const restore = createRestore(model, { tree, grid });
 const trail = createTrail();
 const preview = mountPreview($('preview'), {
   read: (path, offset) => conn.link.call('read', { path, offset }), copy: text => coda.copy(text),
-  actions: isIOS ? [] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS, // iPhone 的复制路径在 ⋯ 菜单里
+  // iPhone 预览头部右边的 ⋯（刷新、复制路径）：顶部工具条在预览时只有「返回」，只留头部一行标题
+  actions: isIOS ? [{ label: '更多', icon: 'ellipsis', run: (_, button) => toggleMore(button) }] : [{ label: '窗口', icon: 'window', run: openInView }], copyInHead: !isIOS,
   back: isIOS ? null : closePreview,
   // 选中文字的右键菜单只有 Mac：iPhone 用系统的选区菜单。
   selectionMenu: isIOS ? null : (event, selection) => menu.open(event, { items: chat.selectionItems(selection) }),
@@ -167,10 +168,11 @@ const toolbarItems = () => infoOpen ? [] : hasToolbar
     { id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' },
     { id: 'hidden', label: '显示隐藏文件', icon: 'eye', kind: 'toggle', on: model.showHidden },
   ];
-// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里；预览时标题是文件名，⋯ 里只有刷新和复制路径。
+// iPhone 树页顶部：返回（仅横屏）、根目录名、⋯。刷新、显示隐藏文件和排序都在 ⋯ 的菜单里。
+// 预览时和属性页一样只留返回（竖屏整条不显示）：标题和 ⋯ 在预览头部，⋯ 里只有刷新和复制路径。
 // 属性页上只留返回：竖屏有原生导航栏，整条工具条不显示；横屏导航栏隐藏，页面自己给返回（显示与否都由 style.css 的横屏媒体查询决定）。
 const MORE = { id: 'more', label: '更多', kind: 'button', glyph: 'ellipsis', iconOnly: true, menu: true };
-const phoneItems = () => infoOpen ? [EXIT] : [EXIT, { kind: 'title', label: !model.ready ? '' : mode() === 'preview' ? baseName(model.opened) : dirTitle() }, MORE];
+const phoneItems = () => infoOpen || mode() === 'preview' ? [EXIT] : [EXIT, { kind: 'title', label: model.ready ? dirTitle() : '' }, MORE];
 // 比较键就是要画的项：根目录名变了（换会话）工具条跟着重画。
 let lastItems = '';
 function syncToolbar() {
@@ -232,13 +234,17 @@ function changeView(view) {
   schedule();
 }
 
+// 键盘激活没有 pointerdown，菜单外点击那条规则不管用：同一个按钮再次激活就关闭。
+function toggleMore(button) {
+  if (!menu.hidden && menu.opener === button) menu.hide();
+  else menu.open(button, moreMenu());
+}
+
 function act(id, button) {
   // 横屏时导航栏隐藏，原生返回看不到：这里的「返回」和原生返回走同一个退层逻辑，在根层才关视图。
   if (id === EXIT.id) { if (goBack(1)) backPressed = true; else quiet(() => coda.close()); }
   else if (id === 'more') {
-    // 键盘激活没有 pointerdown，菜单外点击那条规则不管用：同一个按钮再次激活就关闭。
-    if (!menu.hidden && menu.opener === button) menu.hide();
-    else menu.open(button, moreMenu());
+    toggleMore(button);
   }
   else if (id === 'hidden') {
     model.setShowHidden(!model.showHidden);
@@ -363,7 +369,6 @@ function landed() {
 // 路径是上层的标题，由远到近，不含当前页：图标视图在 a/b 是 [根目录名, 'a']；列表视图没有。属性页、预览各多一层当前页（要回到的那一页）：列表视图是 '资源管理器'，图标视图是当前目录名。
 // 预览开着是 opened 不为空、且根目录就绪；没就绪时页面是说明区，路径为空。
 // 标题是当前目录名：根目录是根目录名。
-const baseName = path => path.slice(path.lastIndexOf('/') + 1);
 const dirTitle = () => (model.cwd === '' || model.view !== View.ICONS ? rootName(model.root.path) : model.cwd.slice(model.cwd.lastIndexOf('/') + 1));
 const previewOpen = () => model.ready && model.opened !== null;
 function backPath() {

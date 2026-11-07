@@ -134,6 +134,8 @@ test('iPhone 的预览头部没有「窗口」；行不设 draggable，Mac 设',
   await flush();
   assert.ok(rows(mac.page).filter(node => node.classList.contains('entry')).every(node => node.draggable === true));
   assert.ok(button(mac.page.preview, '窗口'), 'Mac 的预览头部有「窗口」');
+  assert.equal(button(mac.page.preview, '更多'), undefined, 'Mac 的预览头部没有 ⋯');
+  assert.ok(button(ios.page.preview, '更多'), 'iPhone 的预览头部有 ⋯（预览一开就在）');
 });
 
 // 页面重新打开：用上一次存下的状态再来一遍。

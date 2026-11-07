@@ -53,7 +53,7 @@ const formatTime = ms => new Date(ms).toLocaleString('zh-CN', { hour12: false })
 export const lineCount = text => (text === '' ? 1 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
 
 // read(path, offset) → Promise<chunk 回答>，会话换了会以 stale 错误拒绝；copy(text) 复制路径。
-// actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path) }]，预览不知道它们做什么。
+// actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path, button) }]，button 是被点的按钮（菜单用它定位），预览不知道它们做什么。
 // copyInHead：false 时头部不放「复制路径」（iPhone 的复制路径在 ⋯ 菜单里），由页面调 copyPath()。
 // back：给了就在头部最左边放「返回」（Mac 侧栏预览：原生工具栏项目只能在右侧）；文件页和 iPhone 不传。
 // open(path, scroll) 带了要恢复的位置时，返回的 Promise 在「位置用上了」时变 true（正文到了、已设好位置；读取失败不算，位置留着等重试），
@@ -68,7 +68,7 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
   const copyPath = () => path !== null && copy(path);
   const retryButton = h('button', { class: 'link', onclick: () => load(true), hidden: true }, '重试');
   const body = h('div', { class: 'pbody' });
-  const extra = actions.map(({ label, icon: glyph, run }) => action(label, glyph, () => path !== null && run(path)));
+  const extra = actions.map(({ label, icon: glyph, run }) => { const button = action(label, glyph, () => path !== null && run(path, button)); return button; });
   el.replaceChildren(h('div', { class: 'phead' }, ...(back ? [action('返回', 'back', back)] : []), fileIcon, h('div', { class: 'grow' }, name, meta), retryButton,
     ...(copyInHead ? [action('复制路径', 'copy', copyPath)] : []), ...extra), body);
 

@@ -58,28 +58,39 @@ test('图标视图：声明的路径多一级「当前目录名」；steps 为 1
   assert.deepEqual(again.host.calls.back.at(-1), []);
 });
 
-test('预览时的顶部工具条：标题是文件名，⋯ 里只有刷新和复制路径（相对路径）；关了预览回到目录树的样子', async t => {
+test('预览时顶部工具条只有「返回」（exit-only，竖屏不显示）；标题和 ⋯ 在预览头部，⋯ 里只有刷新和复制路径（相对路径），再点同一个按钮关闭', async t => {
   const { page, host } = await start(t);
+  const barNames = () => page.bar.find(node => node.tagName === 'BUTTON' || node.classList.contains('bar-title')).map(node => node.getAttribute('aria-label') ?? node.textContent);
+  assert.deepEqual(barNames(), ['返回', 'A', '更多'], '目录树上工具条不变');
+  assert.equal(page.bar.classList.contains('exit-only'), false);
   rowNamed(page, 'dir').dispatch('click');
   await flush();
   rowNamed(page, 'x.txt').dispatch('click');
   await flush();
-  const title = () => page.bar.find(node => node.classList.contains('bar-title'))[0].textContent;
-  assert.equal(title(), 'x.txt');
-  button(page.bar, '更多').dispatch('click');
+  assert.deepEqual(barNames(), ['返回']);
+  assert.ok(page.bar.classList.contains('exit-only'));
+  assert.equal(previewName(page), 'x.txt');
+  const more = button(page.preview.find(node => node.classList.contains('phead'))[0], '更多');
+  assert.ok(more, '预览头部右边有 ⋯');
   const items = () => page.menu.find(node => node.tagName === 'BUTTON').map(node => node.textContent);
+  more.dispatch('click');
   assert.deepEqual(items(), ['刷新', '复制路径']);
+  assert.ok(visible(page.menu));
+  more.dispatch('click');
+  assert.equal(visible(page.menu), false, '再点同一个按钮关闭');
+  more.dispatch('click');
   const reads = host.reads().length;
   page.menu.find(node => node.textContent === '刷新')[0].dispatch('click');
   await flush();
   assert.equal(host.reads().length, reads + 1, '刷新重读');
-  button(page.bar, '更多').dispatch('click');
+  more.dispatch('click');
   page.menu.find(node => node.textContent === '复制路径')[0].dispatch('click');
   assert.deepEqual(host.calls.copy, ['dir/x.txt']);
 
   host.back(1);
   await flush();
-  assert.equal(title(), 'A');
+  assert.deepEqual(barNames(), ['返回', 'A', '更多'], '关了预览，工具条回到目录树的样子');
+  assert.equal(page.bar.classList.contains('exit-only'), false);
   button(page.bar, '更多').dispatch('click');
   assert.ok(items().includes('显示隐藏文件'));
 });

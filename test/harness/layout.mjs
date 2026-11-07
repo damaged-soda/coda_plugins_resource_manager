@@ -1613,11 +1613,15 @@ try {
     check(`iPhone ${size}：轻点文件在页内切到预览，只读一次，没有调 coda.open，页面还是资源页`, await reqCount('read', 'notes.txt', 0) === reads + 1 && (await evaluate(`__opens.length`)) === 0 && (await evaluate(`location.pathname`)) === '/view/index.html');
     check(`iPhone ${size}：资源页关掉了文字自动放大`, (await evaluate(adjust)) === '100%');
     check(`iPhone ${size}：预览时声明的路径是 ['资源管理器']`, await lastBack() === JSON.stringify(['资源管理器']), await lastBack());
-    const top = await evaluate(`(() => { const bar = document.getElementById('bar'), buttons = [...bar.querySelectorAll('button')].filter(x => x.getClientRects().length > 0);
-      return { title: bar.querySelector('.bar-title')?.textContent, names: buttons.map(x => x.getAttribute('aria-label') ?? x.textContent), heights: buttons.map(x => x.getBoundingClientRect().height),
-        meta: document.querySelector('.pmeta').textContent, copyInHead: document.querySelectorAll('.phead button[aria-label="复制路径"]').length, backInHead: document.querySelectorAll('.phead button[aria-label="返回"]').length }; })()`);
-    check(`iPhone ${size}：顶部工具条标题是文件名，${land ? '返回、更多' : '更多（返回只在横屏）'}，各至少 44 点；头部没有复制和返回按钮，元信息是 行数 · 大小`,
-      top.title === 'notes.txt' && JSON.stringify(top.names) === JSON.stringify(land ? ['返回', '更多'] : ['更多']) && top.heights.every(x => x >= 44) && top.copyInHead === 0 && top.backInHead === 0 && top.meta.startsWith(`${LONG_LINES} 行 · `), JSON.stringify(top));
+    // 只有一行标题：顶部工具条在预览时只给「返回」（竖屏整条不显示，横屏只显示返回），标题和 ⋯ 在预览头部。
+    const top = await evaluate(`(() => { const bar = document.getElementById('bar'), b = bar.getBoundingClientRect(), shown = [...bar.querySelectorAll('button')].filter(x => x.getClientRects().length > 0), head = document.querySelector('#preview .phead'), h = head.getBoundingClientRect();
+      const more = head.querySelector('button[aria-label="更多"]'), m = more?.getBoundingClientRect();
+      return { barDisplay: getComputedStyle(bar).display, barHeight: b.height, barTitle: bar.querySelector('.bar-title') !== null, shown: shown.map(x => x.getAttribute('aria-label') ?? x.textContent), shownH: shown.map(x => x.getBoundingClientRect().height),
+        headTop: h.top, safeTop: parseFloat(getComputedStyle(document.body).paddingTop), name: head.querySelector('.pname').textContent, moreH: m?.height, moreW: m?.width, moreInside: !!m && m.left >= h.left && m.right <= h.right + 0.5 && m.top >= h.top - 0.5 && m.bottom <= h.bottom + 0.5, moreRight: !!m && h.right - m.right < 16,
+        meta: document.querySelector('.pmeta').textContent, copyInHead: head.querySelectorAll('button[aria-label="复制路径"]').length, backInHead: head.querySelectorAll('button[aria-label="返回"]').length }; })()`);
+    check(`iPhone ${size}：预览时${land ? '顶部只有「返回」一条，没有标题' : '顶部工具条整条不显示，头部贴着顶'}；页面只有预览头部一行标题（${top.name}）`,
+      top.name === 'notes.txt' && !top.barTitle && (land ? JSON.stringify(top.shown) === '["返回"]' && top.shownH.every(x => x >= 44) : top.barDisplay === 'none' && top.barHeight === 0 && top.headTop === top.safeTop), JSON.stringify(top));
+    check(`iPhone ${size}：预览头部右边有 44 点的 ⋯，完整在头部里；头部没有复制和返回按钮，元信息是 行数 · 大小`, top.moreH >= 44 && top.moreW >= 44 && top.moreInside && top.moreRight && top.copyInHead === 0 && top.backInHead === 0 && top.meta.startsWith(`${LONG_LINES} 行 · `), JSON.stringify(top));
     // ⋯ 菜单：只有刷新和复制路径（相对路径）。
     await openMore('ios');
     const labels = await evaluate(`[...document.querySelectorAll('#menu button')].map(x => x.textContent)`);
