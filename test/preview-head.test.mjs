@@ -1,4 +1,4 @@
-// 预览头部和 iPhone 文件页的底部工具条：真实的 file-app.mjs 和 preview.mjs，配假 DOM 和脚本化的假模块。
+// 预览头部和文件视图的工具条：真实的 file-app.mjs 和 preview.mjs，配假 DOM 和脚本化的假模块。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
@@ -77,42 +77,19 @@ test('Mac 的文件视图（有 coda.toolbar）：头部的「复制路径」是
   assert.deepEqual(toolbar.at(-1), [{ id: 'refresh', label: '刷新', icon: 'arrow.clockwise', kind: 'button' }]);
 });
 
-test('iPhone 的文件视图：头部没有「复制路径」，底部工具条是 返回、刷新、复制路径（图标加文字）', async t => {
-  const { page, host } = await start(t, { path: 'lib/a.txt', files: { 'lib/a.txt': { text: 'x' } } });
-  assert.equal(named(head(page), '复制路径'), undefined);
-  assert.deepEqual(bar(page), ['返回', '刷新', '复制路径']);
-  assert.ok(page.bar.find(node => node.tagName === 'BUTTON').every(node => node.find(n => n.tagName === 'SVG').length === 1));
-  assert.ok(page.bar.find(node => node.tagName === 'BUTTON')[0].classList.contains('exit'), '返回只在横屏显示');
-
-  named(page.bar, '复制路径').dispatch('click');
+test('iPhone 上别的入口打开的文件视图：没有工具条，正文照常显示，头部有「复制路径」，没有报错', async t => {
+  const { page, host } = await start(t, { path: 'lib/a.txt', platform: 'ios', files: { 'lib/a.txt': { text: 'x' } } });
+  assert.ok(visible(page.preview));
+  assert.equal(page.preview.find(node => node.classList.contains('text'))[0].textContent, 'x');
+  assert.equal(page.bar.hidden, true, '底部工具条已删');
+  assert.deepEqual(bar(page), []);
+  named(head(page), '复制路径').dispatch('click');
   assert.deepEqual(host.copied, ['lib/a.txt']);
-  const reads = host.sent.filter(m => m.type === 'read').length;
-  named(page.bar, '刷新').dispatch('click');
-  await flush();
-  assert.equal(host.sent.filter(m => m.type === 'refresh').length, 1);
-  assert.ok(host.sent.filter(m => m.type === 'read').length > reads, '刷新重读文件');
-  named(page.bar, '返回').dispatch('click');
-  assert.equal(host.closed, 1);
 });
 
-test('iPhone 的文件视图：说明区下底部工具条照样能用，复制的是启动值里的路径', async t => {
-  const { page, host } = await start(t, { path: 'lib/a.txt', files: { 'lib/a.txt': { text: 'x' } } });
-  host.gone();
-  await flush();
-  assert.match(page.notice.textContent, /工作目录已不存在/);
-  assert.ok(visible(page.bar) && !page.bar.inert, '工具条不在 inert 的面板里');
-  named(page.bar, '复制路径').dispatch('click');
-  assert.deepEqual(host.copied, ['lib/a.txt']);
-  named(page.bar, '刷新').dispatch('click');
-  assert.equal(host.sent.filter(m => m.type === 'refresh').length, 1);
-  named(page.bar, '返回').dispatch('click');
-  assert.equal(host.closed, 1);
-});
-
-test('没有指定路径时复制路径什么都不做；非 iPhone 非 Mac（harness）只有一条文字刷新，复制在头部', async t => {
+test('没有指定路径时说明区写「没有指定要打开的文件」；非 iPhone 非 Mac（harness）只有一条文字刷新，复制在头部', async t => {
   const none = await start(t, { path: null, files: {} });
-  named(none.page.bar, '复制路径').dispatch('click');
-  assert.deepEqual(none.host.copied, []);
+  assert.match(none.page.notice.textContent, /没有指定要打开的文件/);
   const web = await start(t, { path: 'f.txt', platform: 'web', files: { 'f.txt': { text: 'x' } } });
   assert.deepEqual(bar(web.page), ['刷新']);
   assert.ok(named(head(web.page), '复制路径'));

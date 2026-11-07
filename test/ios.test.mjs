@@ -10,7 +10,7 @@ const NAMES = Array.from({ length: 8 }, (_, i) => `f${i}.txt`); // 8 个文件�
 // 假模块：list 按 PAGE 分页（游标是起点），read 给固定正文。
 async function open(t, { platform = 'ios', coda = {}, state } = {}) {
   try { t.mock.timers.enable({ apis: ['setTimeout'] }); } catch { /* 同一个测试里第二次打开 */ }
-  const sent = [], saved = [], visibility = [], calls = { open: [], close: 0 };
+  const sent = [], saved = [], visibility = [], events = {}, calls = { open: [], close: 0, back: [] };
   let page, generation = 0;
   const answer = request => {
     if (request.generation !== generation) return;
@@ -25,7 +25,8 @@ async function open(t, { platform = 'ios', coda = {}, state } = {}) {
   page = await loadApp(t, {
     platform,
     postMessage: message => { sent.push(message); if (message.type === 'list' || message.type === 'read') queueMicrotask(() => answer(message)); },
-    on: (name, fn) => { if (name === 'visibility') visibility.push(fn); },
+    on: (name, fn) => { events[name] = fn; if (name === 'visibility') visibility.push(fn); },
+    back: titles => calls.back.push(titles),
     copy: () => {},
     getState: () => state,
     setState: value => saved.push(JSON.parse(JSON.stringify(value))),
@@ -34,7 +35,7 @@ async function open(t, { platform = 'ios', coda = {}, state } = {}) {
     ...coda,
   });
   const host = {
-    sent, saved, calls, visibility,
+    sent, saved, calls, visibility, events,
     session(id = 's1') { generation++; page.post({ type: 'session', generation, session: id }); page.post({ type: 'root', generation, state: 'ready', path: '/A' }); },
   };
   return { page, host, tick: ms => t.mock.timers.tick(ms) };
@@ -45,42 +46,28 @@ const row = (page, name) => rows(page).find(node => node.textContent.includes(na
 // 按可访问名称找：图标按钮靠 aria-label，文字按钮就是它的文字。
 const button = (root, label) => root.find(node => node.tagName === 'BUTTON' && (node.getAttribute('aria-label') ?? node.textContent) === label)[0];
 
-test('iPhone：点文件调 coda.open，args 带会话和路径，树页不进预览模式，只高亮', async t => {
+test('iPhone：点文件在页内切到预览，只读一次、不调 coda.open，选中留着；返回关预览', async t => {
   const { page, host } = await open(t);
   host.session();
   await flush();
   row(page, 'f1.txt').dispatch('click');
   await flush();
-  assert.deepEqual(host.calls.open, [{ view: 'file', args: { session: 's1', path: 'f1.txt' } }]);
+  assert.deepEqual(host.calls.open, []);
+  assert.ok(visible(page.preview));
+  assert.equal(visible(page.tree), false);
+  assert.equal(host.sent.filter(m => m.type === 'read').length, 1, '读一次');
+  assert.deepEqual(host.calls.back.at(-1), ['资源管理器'], '预览比目录多一级：回到「资源管理器」');
+  host.events.visibility(false);
+  assert.equal(host.saved.at(-1).sessions.s1.opened, 'f1.txt', '长按返回退出整层时保存的 opened');
+  host.events.back({ steps: 1 });
+  await flush();
   assert.ok(visible(page.tree));
   assert.equal(visible(page.preview), false);
-  assert.ok(row(page, 'f1.txt').classList.contains('sel'));
-  assert.equal(host.sent.filter(m => m.type === 'read').length, 0, '树页不读文件');
-  assert.equal(host.saved.at(-1).sessions.s1.selected, 'f1.txt', '推入前已同步存下状态');
+  assert.ok(row(page, 'f1.txt').classList.contains('sel'), '回来时刚看的文件是选中的');
+  assert.deepEqual(host.calls.back.at(-1), [], '路径回到打开前');
 });
 
-test('iPhone：coda.open 拒绝或同步抛出都在原地提示，下一次成功后提示撤掉', async t => {
-  const { page, host } = await open(t);
-  host.session();
-  await flush();
-  host.calls.result = () => Promise.reject(new Error('视图不可用'));
-  row(page, 'f0.txt').dispatch('click');
-  await flush();
-  assert.match(page.hint.textContent, /打不开文件：视图不可用/);
-  assert.ok(visible(page.hint) && visible(page.tree));
-
-  host.calls.result = () => { throw new Error('同步失败'); };
-  row(page, 'f0.txt').dispatch('click');
-  await flush();
-  assert.match(page.hint.textContent, /同步失败/);
-
-  host.calls.result = () => undefined;
-  row(page, 'f0.txt').dispatch('click');
-  await flush();
-  assert.equal(visible(page.hint), false);
-});
-
-test('恢复带 selected 的状态：iPhone 不进预览模式，Mac 仍进预览', async t => {
+test('恢复带 selected 的状态：只当选中，不进预览（iPhone、Mac 一样）；带 opened 才进预览', async t => {
   const state = { v: 1, seq: 1, hidden: false, sessions: { s1: { at: 1, expanded: [], selected: 'f2.txt', scroll: { tree: 0, top: 0, left: 0 } } } };
   const ios = await open(t, { state });
   ios.host.session();
@@ -140,19 +127,21 @@ test('iPhone 的预览头部没有「窗口」；行不设 draggable，Mac 设',
   ios.host.session();
   await flush();
   assert.equal(button(ios.page.preview, '窗口'), undefined);
-  assert.equal(button(ios.page.preview, '复制路径'), undefined, 'iPhone 的复制路径在底部工具条');
+  assert.equal(button(ios.page.preview, '复制路径'), undefined, 'iPhone 的复制路径在 ⋯ 菜单里');
   assert.ok(rows(ios.page).filter(node => node.classList.contains('entry')).every(node => !node.draggable));
   const mac = await open(t, { platform: 'mac' });
   mac.host.session();
   await flush();
   assert.ok(rows(mac.page).filter(node => node.classList.contains('entry')).every(node => node.draggable === true));
   assert.ok(button(mac.page.preview, '窗口'), 'Mac 的预览头部有「窗口」');
+  assert.equal(button(mac.page.preview, '更多'), undefined, 'Mac 的预览头部没有 ⋯');
+  assert.ok(button(ios.page.preview, '更多'), 'iPhone 的预览头部有 ⋯（预览一开就在）');
 });
 
 // 页面重新打开：用上一次存下的状态再来一遍。
 const reopen = async (t, host, options) => open(t, { ...options, state: host.saved.at(-1) });
 
-test('打开文件再回来：展开状态、已加载的条数和滚动位置都恢复（iPhone，卸载前的保存）', async t => {
+test('打开文件再回来：重建页面回到预览，返回后展开状态、已加载的条数和滚动位置都恢复（iPhone，visibility 保存）', async t => {
   const first = await open(t);
   first.host.session();
   await flush();
@@ -162,9 +151,13 @@ test('打开文件再回来：展开状态、已加载的条数和滚动位置�
   first.page.tree.scrollTop = 77;
   row(first.page, 'f4.txt').dispatch('click');
   await flush();
+  first.host.visibility.forEach(fn => fn(false)); // 长按返回退出整层：不逐级关闭，opened 留着
 
   const second = await reopen(t, first.host);
   second.host.session();
+  await flush();
+  assert.ok(visible(second.page.preview), '恢复到上次开着的文件');
+  second.host.events.back({ steps: 1 });
   await flush();
   assert.equal(rows(second.page).filter(node => node.classList.contains('entry')).length, 6, '取够了保存的条数，而不是只有第一页');
   assert.equal(second.page.tree.scrollTop, 77);
@@ -186,23 +179,27 @@ test('Mac 切标签（visibility: false 保存）回来同样恢复条数和滚�
   assert.equal(second.page.tree.scrollTop, 40);
 });
 
-test('横屏返回：iPhone 的树页和文件页的页内工具条有「返回」，调用 coda.close；Mac 没有', async t => {
+test('横屏返回：iPhone 的资源页有「返回」：预览时先关预览，到根层才调 coda.close；Mac 没有；文件视图在 iPhone 上没有工具条', async t => {
   const ios = await open(t);
   ios.host.session();
   await flush();
   const exit = button(ios.page.bar, '返回');
   assert.ok(exit.classList.contains('exit'), '显示与否交给 CSS 的横屏媒体查询');
-  exit.dispatch('click');
-  assert.equal(ios.host.calls.close, 1);
+  row(ios.page, 'f1.txt').dispatch('click');
+  await flush();
+  assert.ok(visible(ios.page.preview));
+  button(ios.page.bar, '返回').dispatch('click');
+  await flush();
+  assert.equal(ios.host.calls.close, 0, '先关预览');
+  assert.ok(visible(ios.page.tree));
+  button(ios.page.bar, '返回').dispatch('click');
+  assert.equal(ios.host.calls.close, 1, '根层才关视图');
 
   const mac = await open(t, { platform: 'mac' });
   mac.host.session();
   await flush();
   assert.equal(button(mac.page.bar, '返回'), undefined);
 
-  let closed = 0;
-  const file = await loadFileApp(t, { platform: 'ios', args: { session: 's1', path: 'f1.txt' }, postMessage: () => {}, on: () => {}, copy: () => {}, getState: () => undefined, setState: () => {}, close: () => { closed++; } });
-  button(file.bar, '返回').dispatch('click');
-  assert.equal(closed, 1);
-  assert.ok(button(file.bar, '刷新'));
+  const file = await loadFileApp(t, { platform: 'ios', args: { session: 's1', path: 'f1.txt' }, postMessage: () => {}, on: () => {}, copy: () => {}, getState: () => undefined, setState: () => {}, close: () => {} });
+  assert.equal(file.bar.hidden, true, '文件视图在 iPhone 上没有底部工具条');
 });

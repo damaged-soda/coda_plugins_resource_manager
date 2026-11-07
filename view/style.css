@@ -59,13 +59,12 @@ p { margin: 0; }
 .notice-icon { display: grid; place-items: center; margin-bottom: 6px; color: var(--coda-secondary, #6e6e73); }
 .notice-icon svg { display: block; color: inherit; } /* 说明区的图标不上色 */
 
-/* 页内工具条：iPhone 树页在顶部（返回、根目录名、⋯），文件页在底部（.bottom：返回、刷新、复制路径）。没有 coda.toolbar 的其他平台（harness）是一条文字按钮。 */
+/* 页内工具条：iPhone 资源页在顶部（返回、根目录名或文件名、⋯）。没有 coda.toolbar 的其他平台（harness）是一条文字按钮。 */
 .bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .bar button { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: var(--coda-radius, 6px); color: var(--coda-secondary, #6e6e73); }
 .bar button.on { color: var(--coda-accent, #0a84ff); }
 .bar svg { display: block; flex: none; }
 .bar-title { padding: 0 8px; font-weight: 600; }
-.bar.bottom { padding-bottom: var(--safe-bottom); border-top: 1px solid var(--line); border-bottom: 0; } /* 操作区 44 点（iPhone）之外只加安全区 */
 
 /* 树：只画可见的一段，行高固定（tree.mjs 量 .row 的高度）。
    Mac 是侧栏列表：左右缩进 8 点，行有圆角，选中用 --coda-selection。 */
@@ -104,7 +103,7 @@ p { margin: 0; }
 .tail.warn { color: var(--coda-orange, #b25000); }
 
 /* 预览：头部永远占一行名字加一行说明，加载和失败只换下面的内容。 */
-.preview { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; } /* 底部的安全区归文件页的工具条 */
+.preview { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; } /* 底部的安全区归 .pbody（iPhone，见 .coda-ios .pbody） */
 .phead button, .ghead button { flex: none; white-space: nowrap; }
 .phead, .ghead { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .pico, .ghico { flex: none; display: grid; place-items: center; color: var(--coda-secondary, #6e6e73); }
@@ -230,10 +229,9 @@ button.icon svg { display: block; }
 .coda-ios .bar { gap: 0; padding: 0 8px; }
 .coda-ios .bar button { gap: 6px; padding: 0 12px; border-radius: var(--coda-radius, 10px); color: var(--coda-accent, #0a84ff); }
 .coda-ios .bar button.icon { padding: 0; justify-content: center; }
-.coda-ios .bar.bottom { padding: 0 8px var(--safe-bottom); }
-.coda-ios .bar.bottom button { flex: 1 1 0; justify-content: center; } /* 横排单行：横屏只有 390 点高 */
 .coda-ios .phead, .coda-ios .ghead { padding: 4px 12px; gap: 4px; }
 .coda-ios .phead button, .coda-ios .ghead button { padding: 0 8px; }
+.coda-ios .preview:not(.info) .pbody { padding-bottom: var(--safe-bottom); } /* 资源页里没有底部工具条：最后一行不被 Home 指示条盖住 */
 .coda-ios .code { font-size: .8em; } /* 窄屏多看些：17 点下约 13.6 点 */
 .coda-ios .menu button { padding: 0 10px; }
 .coda-ios .menu button:active { background: var(--coda-selection, var(--hover)); }

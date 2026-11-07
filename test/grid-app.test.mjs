@@ -55,21 +55,16 @@ test('图标视图：只显示当前这一层，面板可见、目录树面板�
 });
 
 for (const platform of ['mac', 'ios']) {
-  test(`单击文件夹进入这一层并加载，单击文件走现有的打开方式（${platform}）`, async t => {
+  test(`单击文件夹进入这一层并加载，单击文件在页内切到预览（${platform}）`, async t => {
     const { page, host } = await start(t, { platform });
     await click(page, 'dir');
     assert.ok(host.lists().some(request => request.path === 'dir'));
     assert.deepEqual(cells(page).map(node => node.textContent), ['inner', 'x.txt', 'y.txt']);
-    if (platform === 'mac') {
-      await click(page, 'x.txt');
-      assert.equal(visible(page.preview), true, 'Mac 在侧栏切到文件');
-      assert.equal(visible(page.grid), false);
-      assert.deepEqual(host.calls.open, []);
-    } else {
-      await click(page, 'x.txt');
-      assert.deepEqual(host.calls.open, [{ view: 'file', args: { session: 's1', path: 'dir/x.txt' } }], 'iPhone 推入文件页');
-      assert.ok(cellNamed(page, 'x.txt').classList.contains('sel'), '选中只用来高亮');
-    }
+    await click(page, 'x.txt');
+    assert.equal(visible(page.preview), true, '在页内切到文件');
+    assert.equal(visible(page.grid), false);
+    assert.deepEqual(host.calls.open, [], '两端都不再推入文件页');
+    assert.equal(host.reads().length, 1);
   });
 }
 
@@ -334,7 +329,7 @@ test('恢复途中换排序：待恢复的位置作废，内容到了也不跳',
   assert.equal(body(page).scrollTop, 0);
 });
 
-test('页面重建（iPhone 打开文件再回来）：当前目录的位置恢复，再往上一层回到顶部', async t => {
+test('页面重建（iPhone 退出时预览开着）：回到预览；返回后当前目录的位置恢复，再往上一层回到顶部', async t => {
   const saved = [];
   const first = await start(t, { platform: 'ios', coda: { setState: value => saved.push(JSON.parse(JSON.stringify(value))) } });
   scrollTo(first.page, ROW * 2);
@@ -344,12 +339,17 @@ test('页面重建（iPhone 打开文件再回来）：当前目录的位置恢�
   first.host.changed();
   await flush();
   scrollTo(first.page, ROW * 8);
-  await click(first.page, 'd27.txt'); // 打开文件：页面卸载，当前状态先存下
-  assert.equal(first.host.calls.open.length, 1);
+  await click(first.page, 'd27.txt'); // 打开文件：页内预览，长按返回退出整层时 visibility: false 同步存下
+  assert.equal(first.host.calls.open.length, 0);
+  first.host.events.visibility(false);
   const second = await openTree(t, { platform: 'ios', listing: { ...makeListing(), dir: first.host.listing.dir }, state: saved.at(-1) });
   Object.assign(body(second.page), { clientWidth: 300, clientHeight: ROW * 5 });
   second.host.session('s1', '/A');
   await flush();
+  assert.equal(visible(second.page.preview), true, '恢复到上次开着的文件');
+  second.page.bar.find(node => node.classList.contains('exit'))[0].dispatch('click'); // 横屏返回先关预览
+  await flush();
+  assert.equal(visible(second.page.grid), true);
   assert.equal(body(second.page).scrollTop, ROW * 8, '当前目录的位置恢复');
   second.page.bar.find(node => node.classList.contains('exit'))[0].dispatch('click');
   await flush();

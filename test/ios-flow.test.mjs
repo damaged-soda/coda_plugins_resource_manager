@@ -1,34 +1,34 @@
-// 真实模块（activate）+ 真实 app.mjs、file-app.mjs + 真实临时目录：iPhone 上「打开文件再回来」走一遍。
+// 真实模块（activate）+ 真实 app.mjs + 真实临时目录：iPhone 上「打开文件再返回」走一遍（页内预览，同一个页面）。
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { activate } from '../main.mjs';
-import { loadApp, loadFileApp } from './support/dom.mjs';
+import { loadApp } from './support/dom.mjs';
 import { checkoutOf, deferred, fakeCoda, tempDir, waitFor } from './support/fake.mjs';
 
 const COUNT = 1000; // 名字取长一点，带上大小和修改时间后一页（96 KiB）放不下，需要两页
 const name = i => `file-${String(i).padStart(4, '0')}-${'x'.repeat(80)}.txt`;
 
-// 挂一个树页：getState 给上次存下的状态，coda.open 记下参数。
+// 挂一个树页：getState 给上次存下的状态，coda.open 记下参数，原生返回的事件记在 events。
 async function mountTree(t, fake, state, opened) {
   const view = fake.open('A');
-  const ready = deferred(), saved = [];
+  const ready = deferred(), saved = [], events = {};
   let page;
   view.listen(message => ready.promise.then(() => queueMicrotask(() => page.post(message))));
   page = await loadApp(t, {
-    platform: 'ios', postMessage: message => view.send(message), on: () => {}, copy: () => {},
+    platform: 'ios', postMessage: message => view.send(message), on: (name, fn) => { events[name] = fn; }, back: () => {}, copy: () => {},
     getState: () => state, setState: value => saved.push(JSON.parse(JSON.stringify(value))),
     open: args => { opened.push(args); }, close: () => {},
   });
   ready.resolve();
-  return { page, view, saved };
+  return { page, view, saved, events };
 }
 
 const entryRows = page => page.tree.find(node => node.classList.contains('entry'));
 const scrollTo = (page, top) => { page.tree.scrollTop = top; page.tree.dispatch('scroll'); };
 
-test('树 → 文件页 → 回到树：展开、已加载的条数、滚动位置都在，文件页读到的是点的那个文件', async t => {
+test('树 → 预览 → 返回：同一个页面里展开、已加载的条数、滚动位置都在，预览读到的是点的那个文件', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const base = await tempDir(t), root = join(base, 'repo');
   await mkdir(join(root, 'sub'), { recursive: true });
@@ -37,7 +37,7 @@ test('树 → 文件页 → 回到树：展开、已加载的条数、滚动位�
   const fake = fakeCoda({ A: checkoutOf(root) });
   activate(fake.coda);
 
-  // 第一次：展开 sub，加载第二页，滚到深处，点一个文件。
+  // 展开 sub，加载第二页，滚到深处，点一个文件。
   const opened = [];
   const one = await mountTree(t, fake, undefined, opened);
   await waitFor(() => entryRows(one.page).some(node => node.textContent.includes('sub')), '根目录');
@@ -53,29 +53,19 @@ test('树 → 文件页 → 回到树：展开、已加载的条数、滚动位�
   more().dispatch('click');
   await waitFor(() => parseInt(total(), 10) / rowH === COUNT + 2, '第二页');
   scrollTo(one.page, (firstPage + 100) * rowH);
+  const before = one.page.tree.scrollTop;
   const target = entryRows(one.page).find(node => node.classList.contains('file'));
   const targetName = target.find(node => node.classList.contains('name'))[0].textContent;
   target.dispatch('click');
-  await waitFor(() => opened.length === 1, 'coda.open');
-  assert.equal(opened[0].view, 'file');
-  assert.equal(opened[0].args.session, 'A');
-  assert.equal(opened[0].args.path, targetName);
-
-  // 文件页：用同样的 args 打开，读到正文。
-  const fileView = fake.open(null, { view: 'file', args: opened[0].args }), ready = deferred();
-  let file;
-  fileView.listen(message => ready.promise.then(() => queueMicrotask(() => file.post(message))));
-  file = await loadFileApp(t, { platform: 'ios', args: opened[0].args, postMessage: message => fileView.send(message), on: () => {}, copy: () => {}, getState: () => undefined, setState: () => {}, close: () => {} });
-  ready.resolve();
   const index = Number(targetName.slice(5, 9));
-  await waitFor(() => file.preview.find(node => node.classList.contains('text'))[0]?.textContent === `body-${index}`, '文件页正文');
+  await waitFor(() => one.page.preview.find(node => node.classList.contains('text'))[0]?.textContent === `body-${index}`, '预览正文');
+  assert.deepEqual(opened, [], '不再推入文件页');
 
-  // 返回：树页重新打开，用存下的状态。
-  const state = one.saved.at(-1);
-  assert.ok(state.sessions.A.loaded[''] > firstPage - 2, '状态里存的是条数');
-  const two = await mountTree(t, fake, state, []);
-  await waitFor(() => parseInt(two.page.tree.children[1].style.height, 10) / rowH === COUNT + 2, '取够条数');
-  assert.equal(two.page.tree.scrollTop, (firstPage + 100) * rowH);
-  scrollTo(two.page, 0);
-  assert.ok(entryRows(two.page).some(node => node.textContent.includes('x.txt')), 'sub 仍然展开');
+  // 返回：同一个页面，目录树原样。
+  one.events.back({ steps: 1 });
+  await waitFor(() => !one.page.tree.classList.contains('off'), '回到树');
+  assert.equal(one.page.tree.scrollTop, before, '滚动位置不变');
+  assert.equal(parseInt(total(), 10) / rowH, COUNT + 2, '加载过的条数不变');
+  scrollTo(one.page, 0);
+  assert.ok(entryRows(one.page).some(node => node.textContent.includes('x.txt')), 'sub 仍然展开');
 });

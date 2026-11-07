@@ -94,6 +94,8 @@ view/style.css          iPhone 尺寸、安全区、横屏返回
 
 ## 7. 文件视图
 
+> `0.7.1` 起 iPhone 点文件不再进这个视图，改在资源页里切到预览（设计见 `phase-3.md` 第 16 节）。下面写 iPhone 的部分（底部工具条等）已取代；这个视图留给 Mac 的「窗口」。
+
 - 启动：连接模块，`root` 为 `ready` 时打开 `coda.args.path`。
 - `changed`：`preview.refresh()`。
 - 工具条刷新：和树页语义相同，先发协议的 `refresh`（让模块重新查询根目录），已打开文件的再 `preview.refresh()`。`gone`、`none` 下模块不轮询，这是恢复的入口。
@@ -109,6 +111,8 @@ view/style.css          iPhone 尺寸、安全区、横屏返回
 - 拖动、右键菜单不变。
 
 ## 9. iPhone
+
+> `0.7.1` 起 iPhone 打开文件的做法已由 `phase-3.md` 第 16 节取代：页内预览、`coda.back` 声明层级，不再 `coda.open` 推入文件页。下面「打开文件」一段只是历史记录。
 
 **打开文件**：`coda.platform === 'ios'` 时，点文件调 `coda.open`，树页不进入预览模式。`selected` 只用来高亮刚打开的文件。`coda.open` 失败时在原地提示。
 

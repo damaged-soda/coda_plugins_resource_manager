@@ -53,9 +53,11 @@ const formatTime = ms => new Date(ms).toLocaleString('zh-CN', { hour12: false })
 export const lineCount = text => (text === '' ? 1 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0));
 
 // read(path, offset) → Promise<chunk 回答>，会话换了会以 stale 错误拒绝；copy(text) 复制路径。
-// actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path) }]，预览不知道它们做什么。
-// copyInHead：false 时头部不放「复制路径」（iPhone 放在底部工具条），由页面调 copyPath()。
+// actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path, button) }]，button 是被点的按钮（菜单用它定位），预览不知道它们做什么。
+// copyInHead：false 时头部不放「复制路径」（iPhone 的复制路径在 ⋯ 菜单里），由页面调 copyPath()。
 // back：给了就在头部最左边放「返回」（Mac 侧栏预览：原生工具栏项目只能在右侧）；文件页和 iPhone 不传。
+// open(path, scroll) 带了要恢复的位置时，返回的 Promise 在「位置用上了」时变 true（正文到了、已设好位置；读取失败不算，位置留着等重试），
+// 在「位置作废」时变 false（预览关了、改看别的文件）。读取被刷新、重载或 changed 作废时位置不丢：接替它的那次读取接着带上，用上才算完。
 // selectionMenu(event, { path, text, startLine, endLine })：给了就接管正文里选中文字的右键（只有 Mac 传）；预览不知道菜单里是什么。
 // 选区为空、或裁到正文里之后为空时不接管，走系统默认。内容和行号在这里取好，交出去之后和选区无关。
 export function mountPreview(el, { read, copy, actions = [], copyInHead = true, back = null, selectionMenu = null }) {
@@ -64,13 +66,15 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
   // 图标按钮：可访问名称和 Mac 的悬停提示都是 label；没有图标的退回文字。
   const action = (label, glyph, run) => h('button', { class: glyph ? 'icon' : 'link', 'aria-label': label, title: label, onclick: run }, glyph ? icon(glyph, 18) : label);
   const copyPath = () => path !== null && copy(path);
-  const retryButton = h('button', { class: 'link', onclick: () => load(null, true), hidden: true }, '重试');
+  const retryButton = h('button', { class: 'link', onclick: () => load(true), hidden: true }, '重试');
   const body = h('div', { class: 'pbody' });
-  const extra = actions.map(({ label, icon: glyph, run }) => action(label, glyph, () => path !== null && run(path)));
+  const extra = actions.map(({ label, icon: glyph, run }) => { const button = action(label, glyph, () => path !== null && run(path, button)); return button; });
   el.replaceChildren(h('div', { class: 'phead' }, ...(back ? [action('返回', 'back', back)] : []), fileIcon, h('div', { class: 'grow' }, name, meta), retryButton,
     ...(copyInHead ? [action('复制路径', 'copy', copyPath)] : []), ...extra), body);
 
   let path = null, token = 0, shown = null, objectUrl = null; // shown：当前显示的 { size, mtimeMs }
+  let carry = null; // 待恢复的位置 { scroll, settle }：open 带进来，读取真正用上或作废后才清
+  const settle = used => { const c = carry; carry = null; c?.settle(used); };
   let metaText = ' ', metaTitle = '', stale = null; // stale：后台刷新失败的原因，此时正文还是上次的
   // 更新失败的提示占用元信息那一行，重试按钮在头部，所以正文不会被顶动。
   const paintMeta = () => {
@@ -129,8 +133,8 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
     notice('读不到这个文件', error.message, { label: '重试', run: retry });
   }
 
-  // silent：刷新。没变化不重画；变了就换内容，并尽量留在原来的滚动位置。
-  async function load(scroll, silent) {
+  // silent：刷新。没变化不重画；变了就换内容，并尽量留在原来的滚动位置；有待恢复的位置时用它。
+  async function load(silent) {
     const mine = ++token, mark = () => mine === token;
     if (!silent) { shown = null; setMeta('读取中…'); revoke(); body.replaceChildren(); }
     try {
@@ -140,28 +144,33 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
       });
       if (!mark() || result.cancelled) return;
       if (result.same) return setStale(null);
-      const keep = scroll ?? { top: body.scrollTop, left: body.scrollLeft };
+      // 刷新留在原位；整页重读（打开、重载、重试）没有要恢复的位置就明确从头开始，不靠清空正文后滚动条自己归零。
+      const keep = carry?.scroll ?? (silent ? { top: body.scrollTop, left: body.scrollLeft } : { top: 0, left: 0 });
       show(result);
       body.scrollTop = keep.top; body.scrollLeft = keep.left;
+      settle(true);
     } catch (error) {
-      if (mark()) failure(error, silent, () => load(null, false));
+      if (mark()) failure(error, silent, () => load(false)); // 失败不算用上：待恢复的位置留着，重试或之后的刷新成功才用、才清
     }
   }
 
   return {
     open(next, scroll = null) {
+      settle(false);
       path = next;
       const base = next.split('/').pop();
       name.textContent = base;
       name.title = next;
       fileIcon.replaceChildren(icon(iconFor({ kind: EntryKind.FILE, name: base }), 22));
-      return load(scroll, false);
+      const used = scroll ? new Promise(done => { carry = { scroll, settle: done }; }) : null;
+      const read = load(false);
+      return used ?? read;
     },
     copyPath,
-    refresh() { return path === null ? undefined : load(null, true); },
+    refresh() { return path === null ? undefined : load(true); },
     // 内容的来源变了（根目录换了位置）：旧正文不能留，也不能按元数据判断「没变」。
-    reload() { return path === null ? undefined : load(null, false); },
-    close() { token++; path = null; shown = null; setMeta(' '); revoke(); body.replaceChildren(); },
+    reload() { return path === null ? undefined : load(false); },
+    close() { settle(false); token++; path = null; shown = null; setMeta(' '); revoke(); body.replaceChildren(); },
     scroll: () => ({ top: body.scrollTop, left: body.scrollLeft }),
     onScroll: fn => body.addEventListener('scroll', fn, { passive: true }),
     get path() { return path; },

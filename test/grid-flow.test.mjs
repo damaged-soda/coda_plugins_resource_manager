@@ -18,15 +18,15 @@ async function mountGrid(t, fake, { platform = 'mac', state, saved = [], back } 
   const view = fake.open('A'), ready = deferred();
   let page;
   view.listen(message => ready.promise.then(() => queueMicrotask(() => page.post(message))));
-  const calls = { back: [] };
+  const calls = { back: [] }, events = {};
   page = await loadApp(t, {
-    platform, postMessage: message => view.send(message), on: () => {}, copy: () => {},
+    platform, postMessage: message => view.send(message), on: (name, fn) => { events[name] = fn; }, copy: () => {},
     ...(back ? { back: titles => calls.back.push(titles) } : {}),
     getState: () => state, setState: value => saved.push(JSON.parse(JSON.stringify(value))), open: () => {}, close: () => {},
   });
   Object.assign(body(page), { clientWidth: 300, clientHeight: 240 });
   ready.resolve();
-  return { page, calls, saved };
+  return { page, calls, saved, events };
 }
 const iconsState = { v: 1, seq: 1, hidden: false, view: 'icons', sessions: {} };
 
@@ -74,22 +74,44 @@ test('真实模块：目录被删之后刷新，模块回答 not_found，回到�
   assert.equal(page.hint.textContent, '文件夹已不存在');
 });
 
-test('真实模块：iPhone 单击文件走 coda.open，重建页面后用保存的状态回到同一层，原生返回的路径立刻重新声明', async t => {
+test('真实模块：iPhone 单击文件在页内预览，声明的路径多一级；一次 back 关预览，steps 为 2 关预览并退一层；重建后回到预览', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const root = join(await tempDir(t), 'repo');
   await mkdir(join(root, 'sub'), { recursive: true });
-  await writeFile(join(root, 'sub', 'inner.txt'), 'x');
+  await writeFile(join(root, 'sub', 'inner.txt'), 'inner-body');
   const fake = fakeCoda({ A: checkoutOf(root) });
   activate(fake.coda);
   const saved = [];
   const first = await mountGrid(t, fake, { platform: 'ios', state: iconsState, saved, back: true });
   await waitFor(() => names(first.page).includes('sub'), '根目录');
-  dbl(cell(first.page, 'sub'));
+  cell(first.page, 'sub').dispatch('click');
   await waitFor(() => names(first.page).includes('inner.txt'), 'sub');
   assert.deepEqual(first.calls.back.at(-1), ['repo']);
-  dbl(cell(first.page, 'inner.txt'));
-  await waitFor(() => saved.length > 0, '打开文件前保存');
+  cell(first.page, 'inner.txt').dispatch('click');
+  const text = page => page.preview.find(node => node.classList.contains('text'))[0]?.textContent;
+  await waitFor(() => text(first.page) === 'inner-body', '预览读到正文');
+  assert.deepEqual(first.calls.back.at(-1), ['repo', 'sub'], '多一级：要回到的 sub');
+
+  first.events.back({ steps: 1 });
+  await waitFor(() => !first.page.grid.classList.contains('off'), '一次 back 关预览');
+  assert.deepEqual(first.calls.back.at(-1), ['repo'], '路径回到打开前');
+  assert.ok(cell(first.page, 'inner.txt').classList.contains('sel'), '选中留着');
+  cell(first.page, 'inner.txt').dispatch('click');
+  await waitFor(() => first.page.grid.classList.contains('off'), '再打开');
+  first.events.back({ steps: 2 });
+  await waitFor(() => names(first.page).includes('sub'), 'steps 为 2：关预览并退到根目录');
+  assert.deepEqual(first.calls.back.at(-1), []);
+
+  // 在 sub 里开着文件时 visibility: false（长按返回退出整层），重建页面：回到预览，返回后仍在 sub。
+  cell(first.page, 'sub').dispatch('click');
+  await waitFor(() => names(first.page).includes('inner.txt'), 'sub');
+  cell(first.page, 'inner.txt').dispatch('click');
+  await waitFor(() => text(first.page) === 'inner-body', '预览');
+  first.events.visibility(false);
   const second = await mountGrid(t, fake, { platform: 'ios', state: saved.at(-1), back: true });
-  await waitFor(() => names(second.page).includes('inner.txt'), '重建后回到 sub');
-  assert.deepEqual(second.calls.back, [['repo']]);
+  await waitFor(() => text(second.page) === 'inner-body', '重建后回到预览');
+  assert.deepEqual(second.calls.back.at(-1), ['repo', 'sub'], '到达就绪后一次声明完整路径');
+  second.events.back({ steps: 1 });
+  await waitFor(() => names(second.page).includes('inner.txt'), '返回后在 sub');
+  assert.deepEqual(second.calls.back.at(-1), ['repo']);
 });

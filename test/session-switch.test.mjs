@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { visible } from './support/dom.mjs';
 import { flush } from './support/fake.mjs';
-import { openTree, rowNamed } from './support/treehost.mjs';
+import { openTree, previewName, rowNamed } from './support/treehost.mjs';
 
 const listing = { '': ['dir/', 'a.txt', 'b.txt'], dir: ['inner.txt'] };
 const touch = (extra = {}) => ({ pointerId: 1, isPrimary: true, clientX: 50, clientY: 60, ...extra });
@@ -16,7 +16,6 @@ async function start(t, options) {
 }
 const down = (page, name) => rowNamed(page, name).dispatch('pointerdown', touch());
 const click = (page, name) => { rowNamed(page, name).dispatch('pointerdown', touch()); rowNamed(page, name).dispatch('pointerup', touch()); rowNamed(page, name).dispatch('click'); };
-const deferred = host => { const out = {}; host.openResult = () => new Promise((resolve, reject) => { out.resolve = resolve; out.reject = reject; }); return out; };
 
 test('长按途中切会话（新会话的 root 已到）：到点不弹菜单', async t => {
   const { page, host, tick } = await start(t);
@@ -49,79 +48,52 @@ test('切会话前的吞点击标记不影响新会话的第一次点击', async
   assert.equal(visible(page.menu), false);
   rowNamed(page, 'a.txt').dispatch('click'); // 不带按下：只靠标记是否被清掉
   await flush();
-  assert.equal(host.calls.open.length, 1);
+  assert.equal(previewName(page), 'a.txt', '在页内打开了预览');
+  assert.equal(host.calls.open.length, 0);
 });
 
-test('切会话时清掉旧会话留下的提示', async t => {
-  const { page, host } = await start(t);
-  host.openResult = () => Promise.reject(new Error('视图不可用'));
+test('iPhone：预览开着时切会话，预览关掉、新会话回到目录；回到旧会话不自己再打开', async t => {
+  const { page, host } = await start(t, { back: true });
   click(page, 'a.txt');
+  await flush();
+  assert.ok(visible(page.preview));
+  host.session('s2');
+  await flush();
+  assert.equal(visible(page.preview), false);
+  assert.ok(visible(page.tree));
+  assert.equal(host.reads().length, 1, '新会话没有读旧文件');
+  click(page, 'b.txt');
+  await flush();
+  assert.equal(previewName(page), 'b.txt', '新会话的点击不受旧状态影响');
+  assert.equal(host.calls.open.length, 0);
+});
+
+test('Mac：旧会话的「窗口」切会话后才拒绝，新会话没有提示；切会话时清掉旧会话留下的提示', async t => {
+  const { page, host } = await start(t, { platform: 'mac' });
+  rowNamed(page, 'a.txt').dispatch('dblclick');
+  await flush();
+  const window = page.preview.find(node => node.tagName === 'BUTTON' && node.getAttribute('aria-label') === '窗口')[0];
+  host.openResult = () => Promise.reject(new Error('视图不可用'));
+  window.dispatch('click');
   await flush();
   assert.equal(page.hint.hidden, false);
   host.session('s2');
   await flush();
-  assert.equal(page.hint.hidden, true);
-});
+  assert.equal(page.hint.hidden, true, '换会话清掉提示');
 
-test('旧会话的 open 切会话后才拒绝：新会话没有提示，点击不被锁', async t => {
-  const { page, host } = await start(t);
-  const open = deferred(host);
-  click(page, 'a.txt');
+  host.session('s3');
   await flush();
-  host.session('s2');
+  rowNamed(page, 'a.txt').dispatch('dblclick');
   await flush();
-  open.reject(new Error('视图不可用'));
+  const late = {};
+  host.openResult = () => new Promise((resolve, reject) => { late.reject = reject; });
+  page.preview.find(node => node.getAttribute('aria-label') === '窗口')[0].dispatch('click');
   await flush();
-  assert.equal(page.hint.hidden, true);
-  assert.equal(page.hint.textContent, '');
-  click(page, 'b.txt');
+  host.session('s4');
   await flush();
-  assert.equal(host.calls.open.length, 2, '新会话的点击没被旧状态锁住');
-});
-
-test('旧会话的 open 切会话后才成功：不隐藏新会话的提示，旧的解锁计时也不影响新会话', async t => {
-  const { page, host, tick } = await start(t);
-  const open = deferred(host);
-  click(page, 'a.txt');
+  late.reject(new Error('视图不可用'));
   await flush();
-  host.session('s2');
-  await flush();
-  host.openResult = () => undefined;
-  page.hint.hidden = false; // 新会话里已有的提示
-  open.resolve();
-  await flush();
-  assert.equal(page.hint.hidden, false, '旧结果不碰新会话的提示');
-  tick(1000); // 旧的解锁计时不该留下，也不该提前解开新会话的锁
-
-  const second = deferred(host);
-  click(page, 'a.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 2);
-  tick(1000);
-  click(page, 'b.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 2, '新会话的 open 仍在进行，继续锁着');
-  second.resolve();
-});
-
-test('旧的解锁计时在切会话时取消', async t => {
-  const { page, host, tick } = await start(t);
-  const first = deferred(host);
-  click(page, 'a.txt');
-  await flush();
-  first.resolve();
-  await flush(); // 成功，解锁计时已排上
-  tick(500);
-  host.session('s2');
-  await flush();
-  const second = deferred(host);
-  click(page, 'a.txt');
-  await flush();
-  tick(500); // 旧计时若还在，此刻会把新会话解开
-  click(page, 'b.txt');
-  await flush();
-  assert.equal(host.calls.open.length, 2);
-  second.resolve();
+  assert.equal(page.hint.hidden, true, '旧会话的结果不碰新会话');
 });
 
 for (const platform of ['ios', 'mac']) {
@@ -132,7 +104,7 @@ for (const platform of ['ios', 'mac']) {
     click(page, 'b.txt');
     await flush();
     assert.equal(visible(page.menu), false);
-    assert.equal(host.calls.open.length, 0);
+    assert.equal(host.reads().length, 0, '文件不打开');
     assert.equal(rowNamed(page, 'b.txt')?.classList.contains('sel') ?? false, false);
 
     rowNamed(page, 'a.txt').dispatch('contextmenu', { clientX: 10, clientY: 10 });

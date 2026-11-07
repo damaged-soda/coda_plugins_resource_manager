@@ -164,7 +164,7 @@ test('选中同一个路径什么都不做：不重新保存', async t => {
   assert.equal(ctx.saves.length, count);
 });
 
-test('iPhone：轻点照旧打开（文件夹展开、文件推入文件页），dblclick 不触发任何东西', async t => {
+test('iPhone：轻点打开（文件夹展开、文件在页内预览，不调 coda.open），dblclick 不触发任何东西', async t => {
   const { page, host } = await startMac(t, { platform: 'ios' });
   rowNamed(page, 'dir').dispatch('click');
   await flush();
@@ -174,11 +174,13 @@ test('iPhone：轻点照旧打开（文件夹展开、文件推入文件页）�
   assert.equal(rowNamed(page, 'dir').getAttribute('aria-expanded'), 'true', 'dblclick 不再切');
   rowNamed(page, 'b.txt').dispatch('dblclick');
   await flush();
-  assert.equal(host.calls.open.length, 0);
+  assert.equal(host.reads().length, 0);
   rowNamed(page, 'a.txt').dispatch('click');
   await flush();
-  assert.deepEqual(host.calls.open, [{ view: 'file', args: { session: 's1', path: 'a.txt' } }]);
-  assert.equal(visible(page.preview), false, '树页不进预览');
+  assert.equal(host.reads().length, 1, '页内预览读一次');
+  assert.deepEqual(host.calls.open, [], '不再推入文件页');
+  assert.equal(visible(page.preview), true);
+  assert.equal(visible(page.tree), false);
 });
 
 test('iPhone 长按菜单没有「打开」', async t => {
