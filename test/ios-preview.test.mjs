@@ -221,3 +221,35 @@ test('退出再进来：恢复到开着的文件，返回回到目录（正常�
   const third = await start(t, { state: second.saved.at(-1) });
   assert.ok(visible(third.page.tree) && !visible(third.page.preview), '返回过的不再恢复到文件');
 });
+
+for (const platform of ['ios', 'mac']) {
+  test(`恢复的读取失败不算用上（${platform}）：visibility: false 存的仍是原位置，重试成功后位置用上、之后才清；失败后关预览再开别的文件从头开始`, async t => {
+    const { host, page, lastTop } = await start(t, { state: RESTORE, platform, back: platform === 'ios' ? true : undefined, session: false });
+    host.failRead = { code: 'io_error', message: '读不了' };
+    host.session();
+    await flush();
+    assert.match(page.preview.textContent, /读不到这个文件/);
+    assert.equal(lastTop(), 120, '失败后存的仍是原来的位置');
+    host.failRead = null;
+    button(page.preview, '重试').dispatch('click');
+    await flush();
+    assert.equal(pbody(page).scrollTop, 120);
+    assert.equal(pbody(page).scrollLeft, 7);
+    pbody(page).scrollTop = 40;
+    assert.equal(lastTop(), 40, '用上之后才清');
+  });
+
+  test(`恢复的读取失败后关预览再开别的文件：新文件从头开始，旧位置作废（${platform}）`, async t => {
+    const { host, page } = await start(t, { state: RESTORE, platform, back: platform === 'ios' ? true : undefined, session: false });
+    host.failRead = { code: 'io_error', message: '读不了' };
+    host.session();
+    await flush();
+    host.failRead = null;
+    if (platform === 'ios') host.back(1); else button(page.preview, '返回').dispatch('click');
+    await flush();
+    rowNamed(page, 'b.txt').dispatch(platform === 'ios' ? 'click' : 'dblclick');
+    await flush();
+    assert.equal(previewName(page), 'b.txt');
+    assert.equal(pbody(page).scrollTop, 0);
+  });
+}

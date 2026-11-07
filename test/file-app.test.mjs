@@ -218,6 +218,34 @@ test('恢复的位置在内容到达前不被覆盖；坏的状态被忽略', as
   }
 });
 
+test('恢复的读取失败不算用上（Mac 窗口）：保存的仍是原位置，重试成功后位置用上、之后才清；改看别的文件从头开始', async t => {
+  const roots = { '/A': { ...tree('aaaaa'), ...tree('gggg', 100, 'g.txt') } };
+  const { page, host } = await open(t, { roots, state: { v: 1, top: 77, left: 3 } });
+  host.failRead = { code: 'io_error', message: '读不了' };
+  host.session('s1');
+  await flush();
+  assert.match(page.preview.textContent, /读不到这个文件/);
+  host.events.visibility(false);
+  assert.deepEqual(host.saved.at(-1), { v: 1, top: 77, left: 3 }, '失败后仍是原位置');
+  host.failRead = null;
+  button(page.preview, '重试').dispatch('click');
+  await flush();
+  assert.equal(body(page).scrollTop, 77);
+  body(page).scrollTop = 20;
+  host.events.visibility(false);
+  assert.deepEqual(host.saved.at(-1), { v: 1, top: 20, left: 3 }, '用上之后才清');
+
+  const again = await open(t, { roots, state: { v: 1, top: 77, left: 3 } });
+  again.host.failRead = { code: 'io_error', message: '读不了' };
+  again.host.session('s1');
+  await flush();
+  again.host.failRead = null;
+  again.host.events.context({ args: { session: 's1', path: 'g.txt' } });
+  await flush();
+  assert.equal(text(again.page), 'gggg');
+  assert.equal(body(again.page).scrollTop, 0, '改看别的文件，旧位置作废');
+});
+
 test('恢复的初次读取被 changed 作废：位置在接替它的读取里用上，之后才存成新位置（Mac 窗口，同一个信号）', async t => {
   const { page, host } = await open(t, { state: { v: 1, top: 77, left: 3 } });
   host.hold = true;

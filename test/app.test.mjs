@@ -386,7 +386,7 @@ test('Mac 返回后展开的目录、它的子项和滚动位置都在：先展�
   assert.equal(page.tree.scrollTop, 10, '滚动位置保留');
 });
 
-test('iPhone 点文件不进预览，预览头部没有「返回」', async t => {
+test('iPhone 预览头部没有「返回」按钮', async t => {
   const { page } = await open(t, { roots: { '/A': tree('aaaaa') }, coda: { platform: 'ios' } });
   await Promise.resolve();
   assert.equal(button(page.preview, '返回'), undefined);

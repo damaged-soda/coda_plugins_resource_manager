@@ -56,7 +56,7 @@ export const lineCount = text => (text === '' ? 1 : text.split('\n').length - (t
 // actions：头部在「复制路径」旁额外加的按钮 [{ label, icon, run(path) }]，预览不知道它们做什么。
 // copyInHead：false 时头部不放「复制路径」（iPhone 的复制路径在 ⋯ 菜单里），由页面调 copyPath()。
 // back：给了就在头部最左边放「返回」（Mac 侧栏预览：原生工具栏项目只能在右侧）；文件页和 iPhone 不传。
-// open(path, scroll) 带了要恢复的位置时，返回的 Promise 在「位置用上了」时变 true（正文到了、已设好位置，或这次读取以失败结束），
+// open(path, scroll) 带了要恢复的位置时，返回的 Promise 在「位置用上了」时变 true（正文到了、已设好位置；读取失败不算，位置留着等重试），
 // 在「位置作废」时变 false（预览关了、改看别的文件）。读取被刷新、重载或 changed 作废时位置不丢：接替它的那次读取接着带上，用上才算完。
 // selectionMenu(event, { path, text, startLine, endLine })：给了就接管正文里选中文字的右键（只有 Mac 传）；预览不知道菜单里是什么。
 // 选区为空、或裁到正文里之后为空时不接管，走系统默认。内容和行号在这里取好，交出去之后和选区无关。
@@ -150,7 +150,7 @@ export function mountPreview(el, { read, copy, actions = [], copyInHead = true, 
       body.scrollTop = keep.top; body.scrollLeft = keep.left;
       settle(true);
     } catch (error) {
-      if (mark()) { failure(error, silent, () => load(false)); settle(true); }
+      if (mark()) failure(error, silent, () => load(false)); // 失败不算用上：待恢复的位置留着，重试或之后的刷新成功才用、才清
     }
   }
 
